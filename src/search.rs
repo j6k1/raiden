@@ -561,6 +561,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         let mut is_timeout = false;
 
+        let mut best_score = 0.;
+
         loop {
             if threads == 0 {
                 let r = self.receiver.recv();
@@ -573,11 +575,15 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                 match r {
                     RootEvaluationResult::Value(n, win, nodes,  mvs) => {
-                        let mut pv = mvs.clone();
+                        if n.nodes > 0 && best_score <= n.computed_score() {
+                            best_score = n.computed_score();
 
-                        n.m.map(|m| pv.push_front(m));
+                            let mut pv = mvs.clone();
 
-                        self.send_info(env,&pv,n.computed_score())?;
+                            n.m.map(|m| pv.push_front(m));
+
+                            self.send_info(env, &pv, n.computed_score())?;
+                        }
 
                         node.win += win;
                         node.nodes += nodes;
