@@ -97,7 +97,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
                             shash:u64,
                             m:LegalMove,
                             is_oute:bool)
-                            -> Option<(Option<ObtainKind>,KyokumenMap<u64,()>,KyokumenMap<u64,u32>,bool)> {
+                            -> (Option<ObtainKind>,KyokumenMap<u64,()>,KyokumenMap<u64,u32>,u32) {
         let obtained = match m {
             LegalMove::To(ref m) => m.obtained(),
             _ => None,
@@ -108,12 +108,10 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 
         if is_oute {
             match oute_kyokumen_map.get(gs.teban,&mhash,&shash) {
-                Some(_) => {
-                    return None;
-                },
                 None => {
                     oute_kyokumen_map.insert(gs.teban,mhash,shash,());
                 },
+                _ => ()
             }
         }
 
@@ -121,19 +119,16 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             oute_kyokumen_map.clear(gs.teban);
         }
 
-        let is_sennichite = match current_kyokumen_map.get(gs.teban,&mhash,&shash).unwrap_or(&0) {
-            &c if c >= 3 => {
-                return None;
-            },
+        let sennichite_count = match current_kyokumen_map.get(gs.teban,&mhash,&shash).unwrap_or(&0) {
             &c if c > 0 => {
                 current_kyokumen_map.insert(gs.teban,mhash,shash,c+1);
 
-                true
+                c
             },
-            _ => false,
+            _ => 0,
         };
 
-        Some((obtained,oute_kyokumen_map,current_kyokumen_map,is_sennichite))
+        (obtained,oute_kyokumen_map,current_kyokumen_map,sennichite_count)
     }
 
     fn before_search<'a,'b>(&self,
@@ -425,9 +420,16 @@ impl Ord for GameNode {
 }
 impl PartialOrd for GameNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.computed_score().partial_cmp(&other.computed_score()).map(|r| {
-            r.then((self as *const GameNode).cmp(&(other as *const GameNode)))
-        })
+        let l = self.computed_score();
+        let r = other.computed_score();
+
+        if l == 1. && r == 1. {
+            Some(self.nodes.cmp(&other.nodes))
+        } else {
+            l.partial_cmp(&r).map(|r| {
+                r.then((self as *const GameNode).cmp(&(other as *const GameNode)))
+            })
+        }
     }
 }
 impl Eq for GameNode {}
@@ -570,17 +572,22 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 threads += 1;
 
                 match r {
-                    RootEvaluationResult::Value(mut n, win, nodes,  mvs) => {
+                    RootEvaluationResult::Value(n, win, nodes,  mvs) => {
                         let mut pv = mvs.clone();
 
                         n.m.map(|m| pv.push_front(m));
 
                         self.send_info(env,&pv,n.computed_score())?;
 
-                        n.win += win;
-                        n.nodes += nodes;
+                        node.win += win;
+                        node.nodes += nodes;
 
-                        node.childlren.push(n);
+                        if n.nodes > 0 && n.computed_score() == 1. {
+                            node.childlren.push(n);
+                            break;
+                        } else {
+                            node.childlren.push(n);
+                        }
 
                         if self.end_of_search(env) {
                             break;
@@ -618,11 +625,13 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                             game_node.shash,
                                             m,
                                             Rule::is_oute_move(&gs.state,gs.teban, m)) {
-                    Some((obtained,
+                    (obtained,
                           oute_kyokumen_map,
                           current_kyokumen_map,
-                          is_sennichite)) => {
-                        if is_sennichite {
+                          sennichite_count) => {
+                        if sennichite_count >= 3 {
+                            return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                        } else if sennichite_count > 0 {
                             if Rule::is_mate(gs.teban.opposite(), &gs.state) {
                                 return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                             }
@@ -689,8 +698,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                 threads -= 1;
                             }
                         }
-                    },
-                    None => (),
+                    }
                 }
             } else if evalutor.active_threads() > 0 {
                 threads -= 1;
@@ -757,101 +765,116 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                      evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError> {
         let mut gs = gs;
 
-        let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
-            BeforeSearchResult::Complete(r) => {
-                return Ok(r);
-            },
-            BeforeSearchResult::Terminate(None) => {
-                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
-            },
-            BeforeSearchResult::Terminate(Some(s)) => {
-                return Ok(EvaluationResult::Value(s,1,VecDeque::new()));
-            },
-            BeforeSearchResult::AsyncMvs(mvs) => {
-                mvs
-            }
-        };
+        if node.nodes > 0 {
+            if let Some(mut game_node) = node.childlren.peek_mut() {
+                let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
+                    String::from(
+                        "Move is None."
+                    )
+                ))?;
 
-        if await_mvs.len() > 0 {
-            evalutor.begin_transaction()?;
-        }
-
-        for r in await_mvs {
-            let (mhash,shash,s) = r.recv()?;
-            env.nodes.fetch_add(1,atomic::Ordering::Release);
-
-            if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban,mhash,shash)) {
-                let (ref mut score,_,_) = *g;
-
-                *score = Score::Value(s);
-            }
-        }
-
-        for mut game_node in node.childlren.peek_mut() {
-            let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
-                String::from(
-                    "Move is None."
-                )
-            ))?;
-
-            match self.startup_strategy(gs,
-                                   game_node.mhash,
-                                   game_node.shash,
-                                   m,
-                                   Rule::is_oute_move(&gs.state,gs.teban,m)) {
-                Some((obtained,
-                      oute_kyokumen_map,
-                      current_kyokumen_map,
-                      is_sennichite)) => {
-                    if is_sennichite {
-                        if Rule::is_mate(gs.teban.opposite(), &gs.state) {
+                match self.startup_strategy(gs,
+                                            game_node.mhash,
+                                            game_node.shash,
+                                            m,
+                                            Rule::is_oute_move(&gs.state,gs.teban,m)) {
+                    (obtained,
+                             oute_kyokumen_map,
+                             current_kyokumen_map,
+                             sennichite_count) => {
+                        if sennichite_count >= 3 {
                             return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                        } else if sennichite_count > 0 {
+                            if Rule::is_mate(gs.teban.opposite(), &gs.state) {
+                                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                            }
                         }
-                    }
 
-                    let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
-                                                                              .map(|g| {
-                        let (_,ref state, ref mc) = *g;
-                        (Arc::clone(state),Arc::clone(mc))
-                    }).unwrap();
+                        let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
+                            .map(|g| {
+                                let (_,ref state, ref mc) = *g;
+                                (Arc::clone(state),Arc::clone(mc))
+                            }).unwrap();
 
-                    match next {
-                        (state, mc) => {
-                            let mut gs = GameState {
-                                teban: gs.teban.opposite(),
-                                state: &state,
-                                m: Some(m),
-                                mc: &mc,
-                                obtained: obtained,
-                                current_kyokumen_map: &current_kyokumen_map,
-                                oute_kyokumen_map: &oute_kyokumen_map,
-                                mhash: game_node.mhash,
-                                shash: game_node.shash,
-                                current_depth: gs.current_depth + 1
-                            };
+                        match next {
+                            (state, mc) => {
+                                let mut gs = GameState {
+                                    teban: gs.teban.opposite(),
+                                    state: &state,
+                                    m: Some(m),
+                                    mc: &mc,
+                                    obtained: obtained,
+                                    current_kyokumen_map: &current_kyokumen_map,
+                                    oute_kyokumen_map: &oute_kyokumen_map,
+                                    mhash: game_node.mhash,
+                                    shash: game_node.shash,
+                                    current_depth: gs.current_depth + 1
+                                };
 
-                            let strategy = Recursive::new();
+                                let strategy = Recursive::new();
 
-                            match strategy.search(env, &mut gs, &mut *game_node, event_dispatcher,evalutor)? {
-                                EvaluationResult::Timeout => {
-                                    return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
-                                },
-                                EvaluationResult::Value(win, nodes,  mut mvs) => {
-                                    game_node.win += win;
-                                    game_node.nodes += nodes;
+                                match strategy.search(env, &mut gs, &mut *game_node, event_dispatcher,evalutor)? {
+                                    EvaluationResult::Timeout => {
+                                        return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                                    },
+                                    EvaluationResult::Value(win, nodes,  mut mvs) => {
+                                        node.win += win;
+                                        node.nodes += nodes;
 
-                                    mvs.push_front(m);
+                                        mvs.push_front(m);
 
-                                    return Ok(EvaluationResult::Value(-win,nodes,mvs));
+                                        Ok(EvaluationResult::Value(-win,nodes,mvs))
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                None => (),
+            } else {
+                Err(ApplicationError::LogicError(String::from(
+                    "Move is None."
+                )))
+            }
+        } else {
+            let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
+                BeforeSearchResult::Complete(r) => {
+                    return Ok(r);
+                },
+                BeforeSearchResult::Terminate(None) => {
+                    return Ok(EvaluationResult::Value(Score::Value(0.), 0, VecDeque::new()));
+                },
+                BeforeSearchResult::Terminate(Some(s)) => {
+                    return Ok(EvaluationResult::Value(s, 1, VecDeque::new()));
+                },
+                BeforeSearchResult::AsyncMvs(mvs) => {
+                    mvs
+                }
+            };
+
+            if await_mvs.len() > 0 {
+                evalutor.begin_transaction()?;
+            }
+
+            for r in await_mvs {
+                let (mhash, shash, s) = r.recv()?;
+                env.nodes.fetch_add(1, atomic::Ordering::Release);
+
+                if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban, mhash, shash)) {
+                    let (ref mut score, _, _) = *g;
+
+                    *score = Score::Value(s);
+                }
+            }
+
+            if let Some(g) = env.kyokumen_map.get(&(gs.teban.opposite(), node.mhash, node.shash)) {
+                let (score, _, _) = *g;
+
+                Ok(EvaluationResult::Value(score,1,node.best_moves()))
+            } else {
+                Err(ApplicationError::LogicError(String::from(
+                    "Evaluated board information not found"
+                )))
             }
         }
-
-        Ok(EvaluationResult::Value(Score::Value(0.),0, VecDeque::new()))
     }
 }
