@@ -150,12 +150,16 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             return Ok(BeforeSearchResult::Terminate(Some(Score::Value(0.))));
         }
 
-        if let Some(m) = gs.m {
-            if Rule::is_mate(gs.teban, &*gs.state) {
-                let mut mvs = VecDeque::new();
-                mvs.push_front(m);
-                return Ok(BeforeSearchResult::Terminate(Some(Score::Value(1.))));
-            }
+        let mvs = Rule::win_only_moves(gs.teban,&gs.state);
+
+        if mvs.len() > 0 {
+            let m = mvs[0];
+
+            let mut mvs = VecDeque::new();
+
+            mvs.push_front(m);
+
+            return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::Value(1.),1,mvs)));
         }
 
         let mvs = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
