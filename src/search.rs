@@ -875,6 +875,13 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             if let Some(g) = env.kyokumen_map.get(&(gs.teban.opposite(), node.mhash, node.shash)) {
                 let (score, _, _) = *g;
 
+                node.nodes = 1;
+
+                match score {
+                    Score::Value(s) => {
+                        node.win = s;
+                    }
+                }
                 Ok(EvaluationResult::Value(score,1,node.best_moves()))
             } else {
                 Err(ApplicationError::LogicError(String::from(
