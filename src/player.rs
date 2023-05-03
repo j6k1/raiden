@@ -114,7 +114,7 @@ impl Raiden {
     }
 }
 impl USIPlayer<ApplicationError> for Raiden {
-    const ID: &'static str = "leo";
+    const ID: &'static str = "raiden";
     const AUTHOR: &'static str = "j6k1";
     fn get_option_kinds(&mut self) -> Result<BTreeMap<String,SysEventOptionKind>,ApplicationError> {
         let mut kinds:BTreeMap<String,SysEventOptionKind> = BTreeMap::new();
