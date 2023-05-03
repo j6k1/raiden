@@ -1,0 +1,4 @@
+TurnLimit	1ターンあたりの思考時間（ミリ秒）
+Threads	使用スレッド数
+TURN_COUNT	終局までの予想ターン数
+MIN_TURN_COUNT	残りターン数下限値
