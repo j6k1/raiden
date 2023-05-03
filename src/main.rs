@@ -34,7 +34,6 @@ pub mod error;
 pub mod nn;
 pub mod player;
 pub mod search;
-pub mod solver;
 pub mod learning;
 
 const LEAN_SFEN_READ_SIZE:usize = 1000 * 1000 * 10;
@@ -91,8 +90,6 @@ fn run() -> Result<(),ApplicationError> {
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
     opts.optflag("l", "learn", "Self-game mode.");
-    opts.optopt("", "basedepth", "Search-default-depth.", "number of depth");
-    opts.optopt("", "maxdepth", "Search-max-depth.", "number of depth");
     opts.optopt("", "timelimit", "USI time limit.", "milli second");
     opts.optopt("t", "time", "Running time.", "s: second, m: minute, h: hour, d: day");
     opts.optflag("", "last", "Back a few hands from the end.");

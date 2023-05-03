@@ -28,7 +28,6 @@ use packedsfen::hcpe::haffman_code::GameResult;
 use packedsfen::yaneuraou::reader::PackedSfenReader;
 use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use usiagent::event::{EventQueue, GameEndState, UserEvent, UserEventKind};
-use usiagent::rule::{LegalMove};
 use usiagent::shogi::{Banmen, KomaKind, Mochigoma, MOCHIGOMA_KINDS, MochigomaCollections, Teban};
 use crate::error::{ApplicationError, EvaluationThreadError};
 
@@ -103,9 +102,10 @@ const OPPONENT_INDEX_MAP:[usize; 7] = [
 const SCALE:f32 = 1.;
 #[derive(Debug)]
 pub struct BatchItem {
-    m:LegalMove,
+    mhash:u64,
+    shash:u64,
     input:Arr<f32,2517>,
-    sender:Sender<(u64,u64,i32)>
+    sender:Sender<(u64,u64,f32)>
 }
 #[derive(Debug)]
 pub enum Message {
@@ -284,12 +284,13 @@ impl Evalutor {
         })
     }
 
-    pub fn submit(&self, t:Teban, b:&Banmen, mc:&MochigomaCollections,m:LegalMove,sender:Sender<(u64,u64,i32)>)
+    pub fn submit(&self, t:Teban, b:&Banmen, mc:&MochigomaCollections,mhash:u64,shash:u64,sender:Sender<(u64,u64,f32)>)
         -> Result<(),ApplicationError> {
         let input = InputCreator::make_input(true,t,b,mc);
 
         Ok(self.queue.push(BatchItem {
-            m:m,
+            mhash:mhash,
+            shash:shash,
             input:input,
             sender:sender
         })?)
@@ -345,14 +346,14 @@ impl Evalutor {
                 return Ok(());
             }
 
-            let (m, input, s) = queue.into_par_iter().fold(|| (vec![], vec![], vec![]), |mut acc, item| {
-                acc.0.push(item.m);
+            let (h,input, s) = queue.into_par_iter().fold(|| (vec![], vec![], vec![]), |mut acc, item| {
+                acc.0.push((item.mhash,item.shash));
                 acc.1.push(item.input);
                 acc.2.push(item.sender);
 
                 acc
-            }).reduce(|| (vec![],vec![],vec![]), |mut acc, (m,input,sender)| {
-                acc.0.extend_from_slice(&m);
+            }).reduce(|| (vec![],vec![],vec![]), |mut acc, (h,input,sender)| {
+                acc.0.extend_from_slice(&h);
                 acc.1.extend_from_slice(&input);
                 acc.2.extend_from_slice(&sender);
                 acc
@@ -363,10 +364,10 @@ impl Evalutor {
             match self.receiver.lock() {
                 Ok(receiver) => {
                     receiver.recv().map_err(|e| EvaluationThreadError::from(e))??.into_par_iter()
-                        .zip(m.into_par_iter().zip(s.into_par_iter()))
-                        .for_each(|(r,(m,s))| {
+                        .zip(h.into_par_iter().zip(s.into_par_iter()))
+                        .for_each(|(r,((mhash,shash),s))| {
 
-                        let _ = s.send((m.clone(), ((r.0 + r.1) * (1 << 29) as f32) as i32));
+                        let _ = s.send((mhash, shash, r.0 + r.1));
                     });
                 },
                 Err(e) => {

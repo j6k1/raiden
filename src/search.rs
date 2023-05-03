@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::marker::PhantomData;
-use std::ops::{Add, Neg, Sub};
+use std::ops::{Add, AddAssign, Neg};
 use std::sync::{Arc, atomic, mpsc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
@@ -18,21 +18,13 @@ use usiagent::rule::{LegalMove, Rule, State};
 use usiagent::shogi::{MochigomaCollections, MochigomaKind, ObtainKind, Teban};
 use crate::error::{ApplicationError};
 use crate::nn::Evalutor;
-use crate::search::Score::{INFINITE, NEGINFINITE};
-use crate::solver::{GameStateForMate, MaybeMate, Solver};
 
-pub const BASE_DEPTH:u32 = 2;
-pub const MAX_DEPTH:u32 = 6;
+pub const TURN_LIMIT:u32 = 1000;
 pub const TIMELIMIT_MARGIN:u64 = 50;
 pub const NETWORK_DELAY:u32 = 1100;
-pub const DEFALUT_DISPLAY_EVALUTE_SCORE:bool = false;
 pub const MAX_THREADS:u32 = 1;
-pub const MAX_PLY:u32 = 200;
-pub const MAX_PLY_TIMELIMIT:u64 = 0;
 pub const TURN_COUNT:u32 = 50;
 pub const MIN_TURN_COUNT:u32 = 5;
-pub const DEFAULT_STRICT_MATE:bool = true;
-pub const DEFAULT_MATE_HASH:usize = 8;
 
 pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
     fn search<'a,'b>(&self,env:&mut Environment<L,S>, gs:&mut GameState<'a>,
@@ -71,35 +63,24 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         Ok(env.info_sender.send_immediate(commands)?)
     }
 
-    fn send_depth(&self, env:&mut Environment<L,S>,
-                            depth:u32, seldepth:u32) -> Result<(),ApplicationError> {
-
+    fn send_depth(&self, env:&mut Environment<L,S>, depth:u32) -> Result<(),ApplicationError> {
         let mut commands:Vec<UsiInfoSubCommand> = Vec::new();
         commands.push(UsiInfoSubCommand::Depth(depth));
 
         Ok(env.info_sender.send(commands)?)
     }
 
-    fn send_info(&self, env:&mut Environment<L,S>,
-                      depth:u32, seldepth:u32, pv:&VecDeque<LegalMove>, score:&Score) -> Result<(),ApplicationError>
+    fn send_info(&self, env:&mut Environment<L,S>, pv:&VecDeque<LegalMove>, score:f32) -> Result<(),ApplicationError>
         where Arc<Mutex<OnErrorHandler<L>>>: Send + 'static {
 
         let mut commands: Vec<UsiInfoSubCommand> = Vec::new();
 
-        match score {
-            Score::Value(1.) => {
-                commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Plus)))
-            },
-            Score::Value(0.) => {
-                commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Minus)))
-            },
-            Score::Value(s) => {
-                commands.push(UsiInfoSubCommand::Score(UsiScore::Cp(s.into())))
-            }
-        }
-        if depth < seldepth {
-            commands.push(UsiInfoSubCommand::Depth(depth));
-            commands.push(UsiInfoSubCommand::SelDepth(seldepth));
+        if score == 1. {
+            commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Plus)));
+        } else if score == 0. {
+            commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Minus)));
+        } else {
+            commands.push(UsiInfoSubCommand::Score(UsiScore::Cp(score as i64)));
         }
 
         if pv.len() > 0 {
@@ -111,39 +92,17 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         Ok(env.info_sender.send_immediate(commands)?)
     }
 
-    fn send_score(&self,env:&mut Environment<L,S>,
-                        teban:Teban,
-                        s:Score) -> Result<(),ApplicationError>
-        where Arc<Mutex<OnErrorHandler<L>>>: Send + 'static {
-
-        if env.display_evalute_score {
-            let teban_str = match teban {
-                Teban::Sente => "sente",
-                Teban::Gote =>  "gote"
-            };
-            match &s {
-                Score::INFINITE => {
-                    self.send_message(env,&format!("evalute score = inifinite. ({0})",teban_str))
-                },
-                Score::NEGINFINITE => {
-                    self.send_message(env,&format!("evalute score = neginifinite. ({0})",teban_str))
-                },
-                Score::Value(s) => {
-                    self.send_message(env,&format!("evalute score =  {0: >17} ({1})",s,teban_str))
-                }
-            }
-        } else {
-            Ok(())
-        }
-    }
-
-    fn startup_strategy<'a>(&self,env:&mut Environment<L,S>,
-                            gs: &mut GameState<'a>,
+    fn startup_strategy<'a>(&self,gs: &mut GameState<'a>,
                             mhash:u64,
                             shash:u64,
                             m:LegalMove,
                             is_oute:bool)
-                            -> Option<(Option<ObtainKind>,KyokumenMap<u64,()>,KyokumenMap<u64,u32>)> {
+                            -> Option<(Option<ObtainKind>,KyokumenMap<u64,()>,KyokumenMap<u64,u32>,bool)> {
+        let obtained = match m {
+            LegalMove::To(ref m) => m.obtained(),
+            _ => None,
+        };
+
         let mut oute_kyokumen_map = gs.oute_kyokumen_map.clone();
         let mut current_kyokumen_map = gs.current_kyokumen_map.clone();
 
@@ -174,14 +133,13 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             _ => false,
         };
 
-        Some((obtained,oute_kyokumen_map,current_kyokumen_map))
+        Some((obtained,oute_kyokumen_map,current_kyokumen_map,is_sennichite))
     }
 
     fn before_search<'a,'b>(&self,
                          env: &mut Environment<L, S>,
                          gs: &mut GameState<'a>,
                          node:&mut GameNode,
-                         event_dispatcher:&mut UserEventDispatcher<'b,Self,ApplicationError,L>,
                          evalutor: &Evalutor)
         -> Result<BeforeSearchResult, ApplicationError> {
 
@@ -212,9 +170,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
                 let mut mvs = VecDeque::new();
                 gs.m.map(|m| mvs.push_front(m));
 
-                return Ok(BeforeSearchResult::Complete(
-                    return Ok(BeforeSearchResult::Complete(EvaluationResult::Terminate(Some(Score::Value(0.)))))
-                ));
+                return Ok(BeforeSearchResult::Terminate(Some(Score::Value(0.))));
             } else {
                 mvs
             }
@@ -225,7 +181,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         };
 
         if self.end_of_search(env) {
-            return Ok(BeforeSearchResult::Complete(EvaluationResult::Terminate(None)));
+            return Ok(BeforeSearchResult::Terminate(None));
         } else if self.timelimit_reached(env) || self.timeout_expected(env) || env.stop.load(atomic::Ordering::Acquire) {
             return Ok(BeforeSearchResult::Complete(EvaluationResult::Timeout));
         }
@@ -243,15 +199,17 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             let mhash = env.hasher.calc_main_hash(gs.mhash,gs.teban,gs.state.get_banmen(),gs.mc,m.to_applied_move(),&o);
             let shash = env.hasher.calc_sub_hash(gs.shash,gs.teban,gs.state.get_banmen(),gs.mc,m.to_applied_move(),&o);
 
-            if !env.kyokumen_map.contains_key((gs.teban,mhash,shash)) {
+            node.childlren.push(Box::new(GameNode::new(Some(m),mhash,shash)));
+
+            if !env.kyokumen_map.contains_key(&(gs.teban,mhash,shash)) {
                 let (s,r) = mpsc::channel();
                 let (state,mc,_) = Rule::apply_move_none_check(&gs.state, gs.teban, gs.mc, m.to_applied_move());
 
-                evalutor.submit(gs.teban.opposite(),state.get_banmen(),&mc,m,s)?;
+                evalutor.submit(gs.teban.opposite(),state.get_banmen(),&mc,mhash,shash,s)?;
 
-                env.kyokumen_map.insert_new((gs.teban,mhash,shash),(Score::Value(0.),state,mc));
+                env.kyokumen_map.insert_new((gs.teban,mhash,shash),(Score::Value(0.),Arc::new(state),Arc::new(mc)));
 
-                await_mvs.push((r,m));
+                await_mvs.push(r);
             }
         }
         Ok(BeforeSearchResult::AsyncMvs(await_mvs))
@@ -264,16 +222,16 @@ pub enum EvaluationResult {
 }
 #[derive(Debug)]
 pub enum RootEvaluationResult {
-    Value(GameNode,Score,u64,VecDeque<LegalMove>),
-    Timeout(GameNode),
+    Value(Box<GameNode>,Score,u64,VecDeque<LegalMove>),
+    Timeout(Box<GameNode>),
 }
 #[derive(Debug)]
 pub enum BeforeSearchResult {
     Complete(EvaluationResult),
     Terminate(Option<Score>),
-    AsyncMvs(Vec<(Receiver<(u64,u64,i32)>,LegalMove)>),
+    AsyncMvs(Vec<Receiver<(u64,u64,f32)>>),
 }
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Score {
     Value(f32)
 }
@@ -313,6 +271,15 @@ impl Add<Score> for f32 {
         }
     }
 }
+impl AddAssign<Score> for f32 {
+    fn add_assign(&mut self, rhs: Score) {
+        match rhs {
+            Score::Value(s) => {
+                *self += s;
+            }
+        }
+    }
+}
 pub struct Environment<L,S> where L: Logger, S: InfoSender {
     pub event_queue:Arc<Mutex<UserEventQueue>>,
     pub info_sender:S,
@@ -323,16 +290,9 @@ pub struct Environment<L,S> where L: Logger, S: InfoSender {
     pub turn_limit:Option<Instant>,
     pub turn_count:u32,
     pub min_turn_count:u32,
-    pub base_depth:u32,
-    pub max_depth:u32,
     pub max_nodes:Option<i64>,
-    pub max_ply:Option<u32>,
-    pub max_ply_mate:Option<u32>,
-    pub max_ply_timelimit:Option<Duration>,
     pub network_delay:u32,
-    pub display_evalute_score:bool,
     pub max_threads:u32,
-    pub mate_hash:usize,
     pub stop:Arc<AtomicBool>,
     pub quited:Arc<AtomicBool>,
     pub kyokumen_map:Arc<ConcurrentFixedHashMap<(Teban,u64,u64),(Score,Arc<State>,Arc<MochigomaCollections>)>>,
@@ -351,16 +311,9 @@ impl<L,S> Clone for Environment<L,S> where L: Logger, S: InfoSender {
             turn_limit:self.turn_limit.clone(),
             turn_count:self.turn_count,
             min_turn_count:self.min_turn_count,
-            base_depth:self.base_depth,
-            max_depth:self.max_depth,
             max_nodes:self.max_nodes.clone(),
-            max_ply:self.max_ply.clone(),
-            max_ply_mate:self.max_ply_mate.clone(),
-            max_ply_timelimit:self.max_ply_timelimit.clone(),
             network_delay:self.network_delay,
-            display_evalute_score:self.display_evalute_score,
             max_threads:self.max_threads,
-            mate_hash:self.mate_hash,
             stop:Arc::clone(&self.stop),
             quited:Arc::clone(&self.quited),
             kyokumen_map:self.kyokumen_map.clone(),
@@ -380,16 +333,9 @@ impl<L,S> Environment<L,S> where L: Logger, S: InfoSender {
                turn_limit:Option<Instant>,
                turn_count:u32,
                min_turn_count:u32,
-               base_depth:u32,
-               max_depth:u32,
                max_nodes:Option<i64>,
-               max_ply:Option<u32>,
-               max_ply_mate:Option<u32>,
-               max_ply_timelimit:Option<Duration>,
                network_delay:u32,
-               display_evalute_score:bool,
                max_threads:u32,
-               mate_hash:usize
     ) -> Environment<L,S> {
         let stop = Arc::new(AtomicBool::new(false));
         let quited = Arc::new(AtomicBool::new(false));
@@ -405,16 +351,9 @@ impl<L,S> Environment<L,S> where L: Logger, S: InfoSender {
             turn_limit:turn_limit,
             turn_count:turn_count,
             min_turn_count:min_turn_count,
-            base_depth:base_depth,
-            max_depth:max_depth,
             max_nodes:max_nodes,
-            max_ply:max_ply,
-            max_ply_mate:max_ply_mate,
-            max_ply_timelimit:max_ply_timelimit,
             network_delay:network_delay,
-            display_evalute_score:display_evalute_score,
             max_threads:max_threads,
-            mate_hash:mate_hash,
             stop:stop,
             quited:quited,
             kyokumen_map:Arc::new(ConcurrentFixedHashMap::with_size(1 << 22)),
@@ -432,19 +371,19 @@ pub struct GameState<'a> {
     pub oute_kyokumen_map:&'a KyokumenMap<u64,()>,
     pub mhash:u64,
     pub shash:u64,
-    pub depth:u32,
     pub current_depth:u32
 }
+#[derive(Debug)]
 pub struct GameNode {
     win:f32,
     nodes:u64,
-    m:LegalMove,
+    m:Option<LegalMove>,
     mhash:u64,
     shash:u64,
-    childlren:BinaryHeap<GameNode>
+    childlren:BinaryHeap<Box<GameNode>>
 }
 impl GameNode {
-    pub fn new(m:LegalMove,mhash:u64,shash:u64) -> GameNode {
+    pub fn new(m:Option<LegalMove>,mhash:u64,shash:u64) -> GameNode {
         GameNode {
             win:0.,
             nodes:0,
@@ -461,6 +400,22 @@ impl GameNode {
         } else {
             self.win / self.nodes as f32
         }
+    }
+
+    pub fn best_moves(&self) -> VecDeque<LegalMove> {
+        self.childlren.peek().map(|n| {
+            let mut mvs = n.best_moves();
+
+            self.m.map(|m| mvs.push_front(m));
+
+            mvs
+        }).unwrap_or_else(|| {
+            let mut mvs = VecDeque::new();
+
+            self.m.map(|m| mvs.push_front(m));
+
+            mvs
+        })
     }
 }
 impl Ord for GameNode {
@@ -539,15 +494,13 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
     pub fn termination<'a,'b>(&self,
                        env:&mut Environment<L,S>,
-                       gs: &mut GameState<'a>,
                        node:&mut GameNode,
-                       evalutor: &Evalutor,
-                       score:Score) -> Result<(),ApplicationError> {
+                       evalutor: &Evalutor) -> Result<(),ApplicationError> {
         env.stop.store(true,atomic::Ordering::Release);
 
         while evalutor.active_threads() > 0 {
             match self.receiver.recv().map_err(|e| ApplicationError::from(e)).and_then(|r| r)? {
-                RootEvaluationResult::Value(mut n,s, nodes, mvs) => {
+                RootEvaluationResult::Value(mut n,s, nodes, _) => {
                     n.nodes += nodes;
                     n.win += s;
 
@@ -568,15 +521,15 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                            evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError>  {
         let mut gs = gs;
 
-        let await_mvs = match self.before_search(env,&mut gs,event_dispatcher,node,evalutor)? {
+        let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
             BeforeSearchResult::Complete(r) => {
                 return Ok(r);
             },
             BeforeSearchResult::Terminate(None) => {
-                return Ok(EvaluationResult::Value(Score::Value(0.),0,mvs));
+                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
             },
             BeforeSearchResult::Terminate(Some(s)) => {
-                return Ok(EvaluationResult::Value(s,1,mvs));
+                return Ok(EvaluationResult::Value(s,1,VecDeque::new()));
             },
             BeforeSearchResult::AsyncMvs(mvs) => {
                 mvs
@@ -587,20 +540,18 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             evalutor.begin_transaction()?;
         }
 
-        let mut mvs = Vec::with_capacity(await_mvs.len());
-
         for r in await_mvs {
-            let (mhash,shash,s) = r.0.recv()?;
+            let (mhash,shash,s) = r.recv()?;
             env.nodes.fetch_add(1,atomic::Ordering::Release);
 
-            if let Some(mut g) = env.kyokumen_map.get_mut((gs.teban,mhash,shash)) {
+            if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban,mhash,shash)) {
                 let (ref mut score,_,_) = *g;
 
-                *score = s;
+                *score = Score::Value(s);
             }
         }
 
-        let mvs_count = mvs.len() as u64;
+        let mvs_count = node.childlren.len();
 
         let mut threads = env.max_threads.min(mvs_count as u32);
 
@@ -620,6 +571,12 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                 match r {
                     RootEvaluationResult::Value(mut n, win, nodes,  mvs) => {
+                        let mut pv = mvs.clone();
+
+                        n.m.map(|m| pv.push_front(m));
+
+                        self.send_info(env,&pv,n.computed_score())?;
+
                         n.win += win;
                         n.nodes += nodes;
 
@@ -650,14 +607,30 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                     break;
                 }
             } else if let Some(mut game_node) = node.childlren.pop() {
-                match self.startup_strategy(env,
-                                            gs,
+                let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
+                    String::from(
+                        "Move is None."
+                    )
+                ))?;
+
+                match self.startup_strategy(gs,
                                             game_node.mhash,
                                             game_node.shash,
-                                            game_node.m,
-                                            is_oute) {
-                    Some((oute_kyokumen_map, current_kyokumen_map)) => {
-                        let next = env.kyokumen_map.get((gs.teban,game_node.mhash,game_node.shash)).map(|(_,state,mc)| {
+                                            m,
+                                            Rule::is_oute_move(&gs.state,gs.teban, m)) {
+                    Some((obtained,
+                          oute_kyokumen_map,
+                          current_kyokumen_map,
+                          is_sennichite)) => {
+                        if is_sennichite {
+                            if Rule::is_mate(gs.teban.opposite(), &gs.state) {
+                                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                            }
+                        }
+
+                        let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
+                                                                                  .map(|g| {
+                            let (_,ref state,ref mc) = *g;
                             (Arc::clone(state),Arc::clone(mc))
                         }).unwrap();
 
@@ -683,14 +656,13 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                     let mut gs = GameState {
                                         teban: teban.opposite(),
                                         state: &state,
-                                        m: Some(m),
+                                        m: game_node.m,
                                         mc: &mc,
                                         obtained: obtained,
                                         current_kyokumen_map: &current_kyokumen_map,
                                         oute_kyokumen_map: &oute_kyokumen_map,
-                                        mhash: mhash,
-                                        shash: shash,
-                                        depth: depth - 1,
+                                        mhash: game_node.mhash,
+                                        shash: game_node.shash,
                                         current_depth: current_depth + 1
                                     };
 
@@ -698,7 +670,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                                     let r = strategy.search(&mut env,
                                                                                            &mut gs,
-                                                                                           &mut game_node,
+                                                                                           &mut *game_node,
                                                                                     &mut event_dispatcher, &evalutor);
 
                                     let r = match r {
@@ -706,7 +678,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                             Ok(RootEvaluationResult::Value(game_node,win, nodes, mvs))
                                         },
                                         Ok(EvaluationResult::Timeout) => {
-                                            Ok(RootEvaluationResult::Timeout(game_node))
+                                            Ok(RootEvaluationResult::Value(game_node,Score::Value(0.), 0, VecDeque::new()))
                                         },
                                         Err(e) => Err(e)
                                     };
@@ -727,20 +699,17 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             }
         }
 
-        self.termination(env, &mut gs, node, evalutor,scoreval)?;
+        if is_timeout {
+            Ok(EvaluationResult::Timeout)
+        } else {
+            self.termination(env, node, evalutor)?;
 
-        node.childlren.pop().ok_or(ApplicationError::InvalidStateError(String::from(
-            "Node list is empty"
-        ))).map(|n| {
-            let mvs = match n {
-                EvaluationResult::Value(_, _, mut mvs) => {
-                    mvs.push_front(gs.m);
-                    mvs
-                },
-                _ => VecDeque::new()
-            };
-            EvaluationResult::Value(Score::Value(0.),0,mvs)
-        })
+            node.childlren.pop().ok_or(ApplicationError::InvalidStateError(String::from(
+                "Node list is empty"
+            ))).map(|n| {
+                EvaluationResult::Value(Score::Value(0.), 0, n.best_moves())
+            })
+        }
     }
 }
 impl<L,S> Search<L,S> for Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
@@ -788,15 +757,15 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                      evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError> {
         let mut gs = gs;
 
-        let await_mvs = match self.before_search(env,&mut gs,event_dispatcher,evalutor)? {
+        let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
             BeforeSearchResult::Complete(r) => {
                 return Ok(r);
             },
             BeforeSearchResult::Terminate(None) => {
-                return Ok(EvaluationResult::Value(Score::Value(0.),0,mvs));
+                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
             },
             BeforeSearchResult::Terminate(Some(s)) => {
-                return Ok(EvaluationResult::Value(s,1,mvs));
+                return Ok(EvaluationResult::Value(s,1,VecDeque::new()));
             },
             BeforeSearchResult::AsyncMvs(mvs) => {
                 mvs
@@ -808,25 +777,41 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
         }
 
         for r in await_mvs {
-            let (m,s) = r.0.recv()?;
+            let (mhash,shash,s) = r.recv()?;
             env.nodes.fetch_add(1,atomic::Ordering::Release);
 
-            if let Some(mut g) = env.kyokumen_map.get_mut((gs.teban,mhash,shash)) {
+            if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban,mhash,shash)) {
                 let (ref mut score,_,_) = *g;
 
-                *score = s;
+                *score = Score::Value(s);
             }
         }
 
-        for (mut gamenode) in node.childlren.peek_mut() {
-            match startup_strategy(env,
-                                   gs,
+        for mut game_node in node.childlren.peek_mut() {
+            let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
+                String::from(
+                    "Move is None."
+                )
+            ))?;
+
+            match self.startup_strategy(gs,
                                    game_node.mhash,
                                    game_node.shash,
-                                   game_node.m,
-                                   is_oute) {
-                Some((oute_kyokumen_map,current_kyokumen_map)) => {
-                    let next = env.kyokumen_map.get((gs.teban,game_node.mhash,game_node.shash)).map(|(_,state,mc)| {
+                                   m,
+                                   Rule::is_oute_move(&gs.state,gs.teban,m)) {
+                Some((obtained,
+                      oute_kyokumen_map,
+                      current_kyokumen_map,
+                      is_sennichite)) => {
+                    if is_sennichite {
+                        if Rule::is_mate(gs.teban.opposite(), &gs.state) {
+                            return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                        }
+                    }
+
+                    let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
+                                                                              .map(|g| {
+                        let (_,ref state, ref mc) = *g;
                         (Arc::clone(state),Arc::clone(mc))
                     }).unwrap();
 
@@ -840,23 +825,20 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                 obtained: obtained,
                                 current_kyokumen_map: &current_kyokumen_map,
                                 oute_kyokumen_map: &oute_kyokumen_map,
-                                mhash: mhash,
-                                shash: shash,
-                                depth: depth - 1,
+                                mhash: game_node.mhash,
+                                shash: game_node.shash,
                                 current_depth: gs.current_depth + 1
                             };
 
                             let strategy = Recursive::new();
 
-                            match strategy.search(env, &mut gs, &mut gamenode, event_dispatcher,evalutor)? {
+                            match strategy.search(env, &mut gs, &mut *game_node, event_dispatcher,evalutor)? {
                                 EvaluationResult::Timeout => {
-                                    return Ok(EvaluationResult::Timeout);
+                                    return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                 },
-                                RootEvaluationResult::Value(mut n, win, nodes,  mut mvs) => {
-                                    n.win += win;
-                                    n.nodes += nodes;
-
-                                    node.childlren.push(n);
+                                EvaluationResult::Value(win, nodes,  mut mvs) => {
+                                    game_node.win += win;
+                                    game_node.nodes += nodes;
 
                                     mvs.push_front(m);
 
@@ -870,6 +852,6 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
         }
 
-        Ok(EvaluationResult::Value(Score::Value(0.),0, best_moves))
+        Ok(EvaluationResult::Value(Score::Value(0.),0, VecDeque::new()))
     }
 }
