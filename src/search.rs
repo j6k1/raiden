@@ -259,6 +259,14 @@ impl From<Score> for i64 {
         }
     }
 }
+
+impl From<Score> for f32 {
+    fn from(s: Score) -> Self {
+        match s {
+            Score::Value(s) => s
+        }
+    }
+}
 impl Add<Score> for f32 {
     type Output = Self;
 
@@ -528,6 +536,13 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut gs = gs;
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
+            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
+                let win = -win;
+                node.win = win.into();
+                node.nodes = nodes;
+
+                return Ok(EvaluationResult::Value(-win,nodes,mvs));
+            },
             BeforeSearchResult::Complete(r) => {
                 return Ok(r);
             },
@@ -589,7 +604,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             self.send_info(env, &pv, n.computed_score())?;
                         }
 
-                        node.win += win;
+                        node.win += -win;
                         node.nodes += nodes;
 
                         if n.nodes > 0 && n.computed_score() == 1. {
@@ -688,16 +703,16 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                     let strategy = Recursive::new();
 
                                     let r = strategy.search(&mut env,
-                                                                                           &mut gs,
-                                                                                           &mut *game_node,
-                                                                                    &mut event_dispatcher, &evalutor);
+                                                            &mut gs,
+                                                            &mut *game_node,
+                                                            &mut event_dispatcher, &evalutor);
 
                                     let r = match r {
-                                        Ok(EvaluationResult::Value(win,nodes,mvs)) => {
-                                            Ok(RootEvaluationResult::Value(game_node,win, nodes, mvs))
+                                        Ok(EvaluationResult::Value(win, nodes, mvs)) => {
+                                            Ok(RootEvaluationResult::Value(game_node, win, nodes, mvs))
                                         },
                                         Ok(EvaluationResult::Timeout) => {
-                                            Ok(RootEvaluationResult::Value(game_node,Score::Value(0.), 0, VecDeque::new()))
+                                            Ok(RootEvaluationResult::Value(game_node, Score::Value(0.), 0, VecDeque::new()))
                                         },
                                         Err(e) => Err(e)
                                     };
@@ -725,7 +740,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             node.childlren.pop().ok_or(ApplicationError::InvalidStateError(String::from(
                 "Node list is empty"
             ))).map(|n| {
-                EvaluationResult::Value(Score::Value(0.), 0, n.best_moves())
+                EvaluationResult::Value(Score::Value(n.computed_score()), n.nodes, n.best_moves())
             })
         }
     }
@@ -828,7 +843,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                     },
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
-                                        node.win += win;
+                                        node.win += -win;
                                         node.nodes += nodes;
 
                                         mvs.push_front(m);
@@ -847,6 +862,13 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
         } else {
             let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
+                BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
+                    let win = -win;
+                    node.win = win.into();
+                    node.nodes = nodes;
+
+                    return Ok(EvaluationResult::Value(-win,nodes,mvs));
+                },
                 BeforeSearchResult::Complete(r) => {
                     return Ok(r);
                 },
