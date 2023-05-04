@@ -580,7 +580,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 match r {
                     RootEvaluationResult::Value(n, win, nodes,  mvs) => {
                         if n.nodes > 0 && best_score <= -n.computed_score() {
-                            best_score = n.computed_score();
+                            best_score = -n.computed_score();
 
                             let pv = mvs.clone();
 
