@@ -541,7 +541,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 node.win = win.into();
                 node.nodes = nodes;
 
-                return Ok(EvaluationResult::Value(-win,nodes,mvs));
+                return Ok(EvaluationResult::Value(win,nodes,mvs));
             },
             BeforeSearchResult::Complete(r) => {
                 return Ok(r);
@@ -908,7 +908,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                         node.win = s;
                     }
                 }
-                Ok(EvaluationResult::Value(score,1,node.best_moves()))
+                Ok(EvaluationResult::Value(score,1,VecDeque::new()))
             } else {
                 Err(ApplicationError::LogicError(String::from(
                     "Evaluated board information not found"
