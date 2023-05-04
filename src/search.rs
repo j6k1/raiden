@@ -777,6 +777,8 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
         let mut gs = gs;
 
         if node.nodes > 0 {
+            let childlren_len = node.childlren.len();
+
             if let Some(mut game_node) = node.childlren.peek_mut() {
                 let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
                     String::from(
@@ -833,11 +835,16 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
                                         let win = if win == Score::NEGINFINITE && nodes > 0 {
                                             node.mate_nodes += 1;
-                                            Score::Value(-1.)
+
+                                            if node.mate_nodes == childlren_len {
+                                                win
+                                            } else {
+                                                Score::Value(-1.)
+                                            }
                                         } else {
                                             win
                                         };
-                                        
+
                                         node.win = node.win + -win;
                                         node.nodes += nodes;
 
