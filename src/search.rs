@@ -393,20 +393,30 @@ impl GameNode {
         }
     }
 
-    pub fn best_moves(&self) -> VecDeque<LegalMove> {
-        self.childlren.peek().map(|n| {
-            let mut mvs = n.best_moves();
+    pub fn best_moves(&mut self) -> VecDeque<LegalMove> {
+        while let Some(mut n) = self.childlren.pop() {
+            if n.nodes > 0 {
+                if n.childlren.len() == 0 {
+                    let mut mvs = VecDeque::new();
 
-            self.m.map(|m| mvs.push_front(m));
+                    n.m.map(|m| mvs.push_front(m));
 
-            mvs
-        }).unwrap_or_else(|| {
-            let mut mvs = VecDeque::new();
+                    return mvs
+                } else {
+                    let mut mvs = n.best_moves();
 
-            self.m.map(|m| mvs.push_front(m));
+                    n.m.map(|m| mvs.push_front(m));
 
-            mvs
-        })
+                    return mvs
+                }
+            }
+        }
+
+        let mut mvs = VecDeque::new();
+
+        self.m.map(|m| mvs.push_front(m));
+
+        return mvs
     }
 }
 impl Ord for GameNode {
@@ -723,11 +733,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         } else {
             self.termination(env, node, evalutor)?;
 
-            node.childlren.pop().ok_or(ApplicationError::InvalidStateError(String::from(
-                "Node list is empty"
-            ))).map(|n| {
-                EvaluationResult::Value(n.computed_score(), n.nodes, n.best_moves())
-            })
+            Ok(EvaluationResult::Value(node.computed_score(), node.nodes, node.best_moves()))
         }
     }
 }

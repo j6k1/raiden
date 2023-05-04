@@ -15,7 +15,7 @@ use usiagent::rule::{AppliedMove, Kyokumen, Rule, State};
 use usiagent::shogi::{Banmen, Mochigoma, MochigomaCollections, Move, Teban};
 use crate::error::{ApplicationError};
 use crate::nn::Evalutor;
-use crate::search::{Environment, EvaluationResult, GameNode, GameState, MAX_THREADS, MIN_TURN_COUNT, NETWORK_DELAY, Root, Search, TURN_COUNT, TURN_LIMIT};
+use crate::search::{Environment, EvaluationResult, GameNode, GameState, MAX_THREADS, MIN_TURN_COUNT, NETWORK_DELAY, Root, Score, Search, TURN_COUNT, TURN_LIMIT};
 
 pub trait FromOption {
     fn from_option(option:SysEventOption) -> Option<Self> where Self: Sized;
@@ -358,6 +358,9 @@ impl USIPlayer<ApplicationError> for Raiden {
                     },
                     Ok(EvaluationResult::Timeout) => {
                         self.send_message_immediate(&mut env,"think timeout!")?;
+                        BestMove::Resign
+                    },
+                    Ok(EvaluationResult::Value(Score::NEGINFINITE, _, _)) => {
                         BestMove::Resign
                     },
                     Ok(EvaluationResult::Value(_, _, mvs)) if mvs.len() == 0 => {
