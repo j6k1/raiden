@@ -170,9 +170,6 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             let mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
-                let mut mvs = VecDeque::new();
-                gs.m.map(|m| mvs.push_front(m));
-
                 return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
                 mvs
@@ -258,7 +255,7 @@ impl Add for Score {
         match (self,other) {
             (Score::INFINITE,_) => Score::INFINITE,
             (Score::Value(l),Score::Value(r)) => Score::Value(l + r),
-            (Score::Value(s),Score::NEGINFINITE) => Score::Value(s),
+            (Score::Value(s),Score::NEGINFINITE) => Score::Value(s - 1.),
             (Score::Value(_),Score::INFINITE) => Score::INFINITE,
             (Score::NEGINFINITE,_) => Score::NEGINFINITE
         }
@@ -519,9 +516,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut gs = gs;
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
-            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
+            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mut mvs)) => {
                 node.win = win;
                 node.nodes = nodes;
+
+                gs.m.map(|m| mvs.push_front(m));
 
                 return Ok(EvaluationResult::Value(win,nodes,mvs));
             },
@@ -535,7 +534,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 node.win = win;
                 node.nodes = 1;
 
-                return Ok(EvaluationResult::Value(win,1,VecDeque::new()));
+                let mut mvs = VecDeque::new();
+
+                gs.m.map(|m| mvs.push_front(m));
+
+                return Ok(EvaluationResult::Value(win,1,mvs));
             },
             BeforeSearchResult::AsyncMvs(mvs) => {
                 mvs
@@ -806,6 +809,8 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                         match next {
                             (state, mc) => {
+                                let pm = gs.m;
+
                                 let mut gs = GameState {
                                     teban: gs.teban.opposite(),
                                     state: &state,
@@ -826,13 +831,17 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                     },
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
-                                        if win == Score::NEGINFINITE && nodes > 0 {
+                                        let win = if win == Score::NEGINFINITE && nodes > 0 {
                                             node.mate_nodes += 1;
-                                        }
+                                            Score::Value(-1.)
+                                        } else {
+                                            win
+                                        };
+                                        
                                         node.win = node.win + -win;
                                         node.nodes += nodes;
 
-                                        gs.m.map(|m| mvs.push_front(m));
+                                        pm.map(|m| mvs.push_front(m));
 
                                         Ok(EvaluationResult::Value(-win,nodes,mvs))
                                     }
