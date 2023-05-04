@@ -591,15 +591,15 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
                         1f32
                     }
                     GameEndState::Win => {
-                        -1f32
+                        0f32
                     },
                     GameEndState::Lose if teban == last_teban => {
-                        -1f32
+                        0f32
                     },
                     GameEndState::Lose => {
                         1f32
                     },
-                    _ => 0f32
+                    _ => 0.5f32
                 }
             };
 
@@ -668,9 +668,9 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
                             1f32
                         }
                         GameEndState::Lose => {
-                            -1f32
+                            0f32
                         },
-                        _ => 0f32
+                        _ => 0.5f32
                     }
                 };
 
@@ -750,9 +750,9 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
                             1f32
                         }
                         GameEndState::Lose => {
-                            -1f32
+                            0f32
                         },
-                        _ => 0f32
+                        _ => 0.5f32
                     }
                 };
 
