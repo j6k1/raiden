@@ -12,12 +12,12 @@ use rand::prelude::{Distribution};
 use rand_distr::Normal;
 use rand_xorshift::XorShiftRng;
 use rayon::iter::IntoParallelRefIterator;
-use nncombinator::activation::{ReLu, Tanh};
+use nncombinator::activation::{ReLu, Sigmoid};
 use nncombinator::arr::{Arr, VecArr};
 use nncombinator::cuda::mem::{Alloctype, MemoryPool};
 use nncombinator::device::{Device, DeviceGpu};
 use nncombinator::layer::{ActivationLayer, AddLayer, AddLayerTrain, BatchForward, BatchForwardBase, BatchTrain, ForwardAll, InputLayer, LinearLayer, LinearOutputLayer, TryAddLayer};
-use nncombinator::lossfunction::{Mse};
+use nncombinator::lossfunction::{CrossEntropy};
 use nncombinator::ope::UnitValue;
 use nncombinator::optimizer::{SGD};
 use nncombinator::persistence::{BinFilePersistence, Linear, Persistence, PersistenceType, SaveToFile};
@@ -185,7 +185,7 @@ impl Evalutor {
                         let rnd = rnd.clone();
                         Ok(LinearLayer::<_, _, _, DeviceGpu<f32>, _, 32, 1>::new(l, &device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)?)
                     })?.add_layer(|l| {
-                        ActivationLayer::new(l, Tanh::new(&device), &device)
+                        ActivationLayer::new(l, Sigmoid::new(&device), &device)
                     }).add_layer_train(|l| {
                         LinearOutputLayer::new(l, &device)
                     });
@@ -217,7 +217,7 @@ impl Evalutor {
                         let rnd = rnd.clone();
                         Ok(LinearLayer::<_, _, _, DeviceGpu<f32>, _, 32, 1>::new(l, &device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)?)
                     })?.add_layer(|l| {
-                        ActivationLayer::new(l, Tanh::new(&device), &device)
+                        ActivationLayer::new(l, Sigmoid::new(&device), &device)
                     }).add_layer_train(|l| {
                         LinearOutputLayer::new(l, &device)
                     });
@@ -457,7 +457,7 @@ impl TrainerCreator {
             let rnd = rnd.clone();
             Ok(LinearLayer::<_,_,_,DeviceGpu<f32>,_,32,1>::new(l,&device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)?)
         })?.add_layer(|l| {
-            ActivationLayer::new(l,Tanh::new(&device),&device)
+            ActivationLayer::new(l,Sigmoid::new(&device),&device)
         }).add_layer_train(|l| {
             LinearOutputLayer::new(l,&device)
         });
@@ -489,7 +489,7 @@ impl TrainerCreator {
             let rnd = rnd.clone();
             Ok(LinearLayer::<_,_,_,DeviceGpu<f32>,_,32,1>::new(l,&device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)?)
         })?.add_layer(|l| {
-            ActivationLayer::new(l,Tanh::new(&device),&device)
+            ActivationLayer::new(l,Sigmoid::new(&device),&device)
         }).add_layer_train(|l| {
             LinearOutputLayer::new(l,&device)
         });
@@ -572,7 +572,7 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
                                         _:&'a Mutex<EventQueue<UserEvent,UserEventKind>>)
                                         -> Result<(f32,f32),ApplicationError> {
 
-        let lossf = Mse::new();
+        let lossf = CrossEntropy::new();
 
         let mut teban = last_teban;
         let bias_shake_shake = self.bias_shake_shake;
@@ -635,7 +635,7 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
                                         _:&'a Mutex<EventQueue<UserEvent,UserEventKind>>)
                                         -> Result<(f32,f32),ApplicationError> {
 
-        let lossf = Mse::new();
+        let lossf = CrossEntropy::new();
         let bias_shake_shake = self.bias_shake_shake;
         let similar = self.similar;
 
@@ -706,7 +706,7 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
                                 _:&'a Mutex<EventQueue<UserEvent,UserEventKind>>)
                                 -> Result<(f32,f32),ApplicationError> {
 
-        let lossf = Mse::new();
+        let lossf = CrossEntropy::new();
         let bias_shake_shake = self.bias_shake_shake;
         let similar = self.similar;
 
