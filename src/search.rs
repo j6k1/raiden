@@ -526,11 +526,9 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut gs = gs;
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
-            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mut mvs)) => {
+            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
                 node.win = win;
                 node.nodes = nodes;
-
-                gs.m.map(|m| mvs.push_front(m));
 
                 return Ok(EvaluationResult::Value(win,nodes,mvs));
             },
@@ -544,11 +542,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 node.win = win;
                 node.nodes = 1;
 
-                let mut mvs = VecDeque::new();
-
-                gs.m.map(|m| mvs.push_front(m));
-
-                return Ok(EvaluationResult::Value(win,1,mvs));
+                return Ok(EvaluationResult::Value(win,1,VecDeque::new()));
             },
             BeforeSearchResult::AsyncMvs(mvs) => {
                 mvs
@@ -598,6 +592,10 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             let pv = mvs.clone();
 
                             self.send_info(env, &pv, -n.computed_score())?;
+                        }
+
+                        if win == Score::NEGINFINITE {
+                            node.mate_nodes += 1;
                         }
 
                         node.win = node.win + -win;
@@ -650,12 +648,17 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                           oute_kyokumen_map,
                           current_kyokumen_map,
                           sennichite_count) => {
-                        if sennichite_count >= 3 {
-                            return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
-                        } else if sennichite_count > 0 {
-                            if Rule::is_mate(gs.teban.opposite(), &gs.state) {
-                                return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
-                            }
+                        if sennichite_count >= 3 && game_node.nodes == 0 {
+                            game_node.nodes = 1;
+                            game_node.win = Score::INFINITE;
+
+                            node.childlren.push(game_node);
+
+                            node.mate_nodes += 1;
+                            node.win = node.win + Score::Value(-1.);
+                            node.nodes += 1;
+
+                            continue;
                         }
 
                         let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
@@ -801,12 +804,19 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                              oute_kyokumen_map,
                              current_kyokumen_map,
                              sennichite_count) => {
-                        if sennichite_count >= 3 {
-                            return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
-                        } else if sennichite_count > 0 {
-                            if Rule::is_mate(gs.teban.opposite(), &gs.state) {
-                                return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
-                            }
+                        if sennichite_count >= 3 && game_node.nodes == 0 {
+                            game_node.nodes = 1;
+                            game_node.win = Score::INFINITE;
+
+                            node.mate_nodes += 1;
+                            node.win = node.win + Score::Value(-1.);
+                            node.nodes += 1;
+
+                            let mut mvs = VecDeque::new();
+
+                            gs.m.map(|m| mvs.push_front(m));
+
+                            return Ok(EvaluationResult::Value(Score::Value(-1.),1,mvs));
                         }
 
                         let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
