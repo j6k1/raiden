@@ -258,7 +258,7 @@ impl Add for Score {
         match (self,other) {
             (Score::INFINITE,_) => Score::INFINITE,
             (Score::Value(l),Score::Value(r)) => Score::Value(l + r),
-            (Score::Value(_),Score::NEGINFINITE) => Score::NEGINFINITE,
+            (Score::Value(s),Score::NEGINFINITE) => Score::Value(s),
             (Score::Value(_),Score::INFINITE) => Score::INFINITE,
             (Score::NEGINFINITE,_) => Score::NEGINFINITE
         }
