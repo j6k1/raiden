@@ -80,7 +80,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         } else if score == 0. {
             commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Minus)));
         } else {
-            commands.push(UsiInfoSubCommand::Score(UsiScore::Cp(score as i64)));
+            commands.push(UsiInfoSubCommand::Score(UsiScore::Cp(((score - 0.5) * (1 << 23) as f32) as  i64)));
         }
 
         if pv.len() > 0 {
@@ -384,6 +384,7 @@ pub struct GameState<'a> {
 pub struct GameNode {
     win:f32,
     nodes:u64,
+    mate_nodes:usize,
     m:Option<LegalMove>,
     mhash:u64,
     shash:u64,
@@ -394,6 +395,7 @@ impl GameNode {
         GameNode {
             win:0.,
             nodes:0,
+            mate_nodes:0,
             m:m,
             mhash:mhash,
             shash:shash,
@@ -402,7 +404,9 @@ impl GameNode {
     }
 
     pub fn computed_score(&self) -> f32 {
-        if self.nodes == 0 {
+        if self.nodes > 0 && self.mate_nodes == self.childlren.len() {
+            0.
+        } else if self.nodes == 0 {
             1.
         } else {
             self.win / self.nodes as f32
@@ -516,7 +520,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             match self.receiver.recv().map_err(|e| ApplicationError::from(e)).and_then(|r| r)? {
                 RootEvaluationResult::Value(mut n,s, nodes, _) => {
                     n.nodes += nodes;
-                    n.win += s;
+                    n.win += -s;
 
                     node.childlren.push(n);
                 },
@@ -537,7 +541,6 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
             BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
-                let win = -win;
                 node.win = win.into();
                 node.nodes = nodes;
 
@@ -549,8 +552,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             BeforeSearchResult::Terminate(None) => {
                 return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
             },
-            BeforeSearchResult::Terminate(Some(s)) => {
-                return Ok(EvaluationResult::Value(s,1,VecDeque::new()));
+            BeforeSearchResult::Terminate(Some(win)) => {
+                node.win = win.into();
+                node.nodes = 1;
+
+                return Ok(EvaluationResult::Value(win,1,VecDeque::new()));
             },
             BeforeSearchResult::AsyncMvs(mvs) => {
                 mvs
@@ -597,9 +603,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         if n.nodes > 0 && best_score <= n.computed_score() {
                             best_score = n.computed_score();
 
-                            let mut pv = mvs.clone();
-
-                            n.m.map(|m| pv.push_front(m));
+                            let pv = mvs.clone();
 
                             self.send_info(env, &pv, n.computed_score())?;
                         }
@@ -655,10 +659,10 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                           current_kyokumen_map,
                           sennichite_count) => {
                         if sennichite_count >= 3 {
-                            return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                            return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
                         } else if sennichite_count > 0 {
                             if Rule::is_mate(gs.teban.opposite(), &gs.state) {
-                                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                                return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
                             }
                         }
 
@@ -808,10 +812,10 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                              current_kyokumen_map,
                              sennichite_count) => {
                         if sennichite_count >= 3 {
-                            return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                            return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
                         } else if sennichite_count > 0 {
                             if Rule::is_mate(gs.teban.opposite(), &gs.state) {
-                                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                                return Ok(EvaluationResult::Value(Score::Value(0.),1,VecDeque::new()));
                             }
                         }
 
@@ -843,10 +847,13 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                     },
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
+                                        if f32::from(win) == 0. && nodes > 0 {
+                                            node.mate_nodes += 1;
+                                        }
                                         node.win += -win;
                                         node.nodes += nodes;
 
-                                        mvs.push_front(m);
+                                        gs.m.map(|m| mvs.push_front(m));
 
                                         Ok(EvaluationResult::Value(-win,nodes,mvs))
                                     }
@@ -862,21 +869,33 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
         } else {
             let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
-                BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
-                    let win = -win;
+                BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mut mvs)) => {
                     node.win = win.into();
                     node.nodes = nodes;
 
-                    return Ok(EvaluationResult::Value(-win,nodes,mvs));
+                    gs.m.map(|m| mvs.push_front(m));
+
+                    return Ok(EvaluationResult::Value(win,nodes,mvs));
                 },
                 BeforeSearchResult::Complete(r) => {
                     return Ok(r);
                 },
                 BeforeSearchResult::Terminate(None) => {
-                    return Ok(EvaluationResult::Value(Score::Value(0.), 0, VecDeque::new()));
+                    let mut mvs = VecDeque::new();
+
+                    gs.m.map(|m| mvs.push_front(m));
+
+                    return Ok(EvaluationResult::Value(Score::Value(0.), 0, mvs));
                 },
-                BeforeSearchResult::Terminate(Some(s)) => {
-                    return Ok(EvaluationResult::Value(s, 1, VecDeque::new()));
+                BeforeSearchResult::Terminate(Some(win)) => {
+                    node.win = win.into();
+                    node.nodes = 1;
+
+                    let mut mvs = VecDeque::new();
+
+                    gs.m.map(|m| mvs.push_front(m));
+
+                    return Ok(EvaluationResult::Value(win, 1, mvs));
                 },
                 BeforeSearchResult::AsyncMvs(mvs) => {
                     mvs
@@ -902,12 +921,8 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                 let (score, _, _) = *g;
 
                 node.nodes = 1;
+                node.win = score.into();
 
-                match score {
-                    Score::Value(s) => {
-                        node.win = s;
-                    }
-                }
                 Ok(EvaluationResult::Value(score,1,VecDeque::new()))
             } else {
                 Err(ApplicationError::LogicError(String::from(
