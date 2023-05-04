@@ -900,7 +900,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                 let (score, _, _) = *g;
 
                 node.nodes = 1;
-                node.win = score.into();
+                node.win = score;
 
                 Ok(EvaluationResult::Value(score,1,VecDeque::new()))
             } else {
