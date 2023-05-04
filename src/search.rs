@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::marker::PhantomData;
-use std::ops::{Add, AddAssign, Neg};
+use std::ops::{Add, Neg};
 use std::sync::{Arc, atomic, mpsc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::mpsc::{Receiver, Sender};
@@ -70,17 +70,21 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         Ok(env.info_sender.send(commands)?)
     }
 
-    fn send_info(&self, env:&mut Environment<L,S>, pv:&VecDeque<LegalMove>, score:f32) -> Result<(),ApplicationError>
+    fn send_info(&self, env:&mut Environment<L,S>, pv:&VecDeque<LegalMove>, score:Score) -> Result<(),ApplicationError>
         where Arc<Mutex<OnErrorHandler<L>>>: Send + 'static {
 
         let mut commands: Vec<UsiInfoSubCommand> = Vec::new();
 
-        if score == 1. {
-            commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Plus)));
-        } else if score == 0. {
-            commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Minus)));
-        } else {
-            commands.push(UsiInfoSubCommand::Score(UsiScore::Cp(((score - 0.5) * (1 << 23) as f32) as  i64)));
+        match score {
+            Score::INFINITE => {
+                commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Plus)));
+            },
+            Score::NEGINFINITE => {
+                commands.push(UsiInfoSubCommand::Score(UsiScore::Mate(UsiScoreMate::Minus)));
+            },
+            Score::Value(s) => {
+                commands.push(UsiInfoSubCommand::Score(UsiScore::Cp((s * (1 << 23) as f32) as  i64)));
+            }
         }
 
         if pv.len() > 0 {
@@ -159,7 +163,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 
             mvs.push_front(m);
 
-            return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::Value(1.),1,mvs)));
+            return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::INFINITE,1,mvs)));
         }
 
         let mvs = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
@@ -169,7 +173,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
                 let mut mvs = VecDeque::new();
                 gs.m.map(|m| mvs.push_front(m));
 
-                return Ok(BeforeSearchResult::Terminate(Some(Score::Value(0.))));
+                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
                 mvs
             }
@@ -230,16 +234,20 @@ pub enum BeforeSearchResult {
     Terminate(Option<Score>),
     AsyncMvs(Vec<Receiver<(u64,u64,f32)>>),
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub enum Score {
-    Value(f32)
+    NEGINFINITE,
+    Value(f32),
+    INFINITE
 }
 impl Neg for Score {
     type Output = Score;
 
     fn neg(self) -> Score {
         match self {
-            Score::Value(v) => Score::Value(1.-v),
+            Score::NEGINFINITE => Score::INFINITE,
+            Score::Value(v) => Score::Value(-v),
+            Score::INFINITE => Score::NEGINFINITE
         }
     }
 }
@@ -248,42 +256,11 @@ impl Add for Score {
 
     fn add(self, other:Score) -> Self::Output {
         match (self,other) {
+            (Score::INFINITE,_) => Score::INFINITE,
             (Score::Value(l),Score::Value(r)) => Score::Value(l + r),
-        }
-    }
-}
-impl From<Score> for i64 {
-    fn from(s: Score) -> Self {
-        match s {
-            Score::Value(s) => ((s - 0.5) * (1i32 << 23) as f32) as i64
-        }
-    }
-}
-
-impl From<Score> for f32 {
-    fn from(s: Score) -> Self {
-        match s {
-            Score::Value(s) => s
-        }
-    }
-}
-impl Add<Score> for f32 {
-    type Output = Self;
-
-    fn add(self, rhs: Score) -> Self::Output {
-        match rhs {
-            Score::Value(s) => {
-                self + s
-            }
-        }
-    }
-}
-impl AddAssign<Score> for f32 {
-    fn add_assign(&mut self, rhs: Score) {
-        match rhs {
-            Score::Value(s) => {
-                *self += s;
-            }
+            (Score::Value(_),Score::NEGINFINITE) => Score::NEGINFINITE,
+            (Score::Value(_),Score::INFINITE) => Score::INFINITE,
+            (Score::NEGINFINITE,_) => Score::NEGINFINITE
         }
     }
 }
@@ -382,7 +359,7 @@ pub struct GameState<'a> {
 }
 #[derive(Debug)]
 pub struct GameNode {
-    win:f32,
+    win:Score,
     nodes:u64,
     mate_nodes:usize,
     m:Option<LegalMove>,
@@ -393,7 +370,7 @@ pub struct GameNode {
 impl GameNode {
     pub fn new(m:Option<LegalMove>,mhash:u64,shash:u64) -> GameNode {
         GameNode {
-            win:0.,
+            win:Score::Value(0.),
             nodes:0,
             mate_nodes:0,
             m:m,
@@ -403,13 +380,19 @@ impl GameNode {
         }
     }
 
-    pub fn computed_score(&self) -> f32 {
+    pub fn computed_score(&self) -> Score {
         if self.nodes > 0 && self.mate_nodes == self.childlren.len() {
-            0.
+            Score::NEGINFINITE
         } else if self.nodes == 0 {
-            1.
+            Score::INFINITE
         } else {
-            self.win / self.nodes as f32
+            match self.win {
+                Score::INFINITE => Score::INFINITE,
+                Score::NEGINFINITE => Score::NEGINFINITE,
+                Score::Value(win) => {
+                    Score::Value(win / self.nodes as f32)
+                }
+            }
         }
     }
 
@@ -439,13 +422,9 @@ impl PartialOrd for GameNode {
         let l = self.computed_score();
         let r = other.computed_score();
 
-        if l == 1. && r == 1. {
-            Some(self.nodes.cmp(&other.nodes))
-        } else {
-            l.partial_cmp(&r).map(|r| {
-                r.then((self as *const GameNode).cmp(&(other as *const GameNode)))
-            })
-        }
+        l.partial_cmp(&r).map(|r| {
+            r.then((self as *const GameNode).cmp(&(other as *const GameNode)))
+        })
     }
 }
 impl Eq for GameNode {}
@@ -520,7 +499,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             match self.receiver.recv().map_err(|e| ApplicationError::from(e)).and_then(|r| r)? {
                 RootEvaluationResult::Value(mut n,s, nodes, _) => {
                     n.nodes += nodes;
-                    n.win += -s;
+                    n.win = n.win + -s;
 
                     node.childlren.push(n);
                 },
@@ -541,7 +520,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
             BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
-                node.win = win.into();
+                node.win = win;
                 node.nodes = nodes;
 
                 return Ok(EvaluationResult::Value(win,nodes,mvs));
@@ -553,7 +532,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
             },
             BeforeSearchResult::Terminate(Some(win)) => {
-                node.win = win.into();
+                node.win = win;
                 node.nodes = 1;
 
                 return Ok(EvaluationResult::Value(win,1,VecDeque::new()));
@@ -586,7 +565,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         let mut is_timeout = false;
 
-        let mut best_score = 0.;
+        let mut best_score = Score::NEGINFINITE;
 
         loop {
             if threads == 0 {
@@ -608,10 +587,10 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             self.send_info(env, &pv, n.computed_score())?;
                         }
 
-                        node.win += -win;
+                        node.win = node.win + -win;
                         node.nodes += nodes;
 
-                        if n.nodes > 0 && n.computed_score() == 1. {
+                        if n.computed_score() == Score::INFINITE {
                             node.childlren.push(n);
                             break;
                         } else {
@@ -744,7 +723,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             node.childlren.pop().ok_or(ApplicationError::InvalidStateError(String::from(
                 "Node list is empty"
             ))).map(|n| {
-                EvaluationResult::Value(Score::Value(n.computed_score()), n.nodes, n.best_moves())
+                EvaluationResult::Value(n.computed_score(), n.nodes, n.best_moves())
             })
         }
     }
@@ -847,10 +826,10 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                     },
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
-                                        if f32::from(win) == 0. && nodes > 0 {
+                                        if win == Score::NEGINFINITE && nodes > 0 {
                                             node.mate_nodes += 1;
                                         }
-                                        node.win += -win;
+                                        node.win = node.win + -win;
                                         node.nodes += nodes;
 
                                         gs.m.map(|m| mvs.push_front(m));
@@ -870,7 +849,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
         } else {
             let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
                 BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mut mvs)) => {
-                    node.win = win.into();
+                    node.win = win;
                     node.nodes = nodes;
 
                     gs.m.map(|m| mvs.push_front(m));
@@ -888,7 +867,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                     return Ok(EvaluationResult::Value(Score::Value(0.), 0, mvs));
                 },
                 BeforeSearchResult::Terminate(Some(win)) => {
-                    node.win = win.into();
+                    node.win = win;
                     node.nodes = 1;
 
                     let mut mvs = VecDeque::new();
