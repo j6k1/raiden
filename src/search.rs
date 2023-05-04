@@ -579,7 +579,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                     RootEvaluationResult::Value(n, win, nodes,  mvs) => {
                         let pv = mvs.clone();
 
-                        self.send_info(env, &pv, n.computed_score())?;
+                        self.send_info(env, &pv, -n.computed_score())?;
 
                         node.win = node.win + -win;
                         node.nodes += nodes;
