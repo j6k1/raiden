@@ -902,7 +902,11 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                 node.nodes = 1;
                 node.win = score;
 
-                Ok(EvaluationResult::Value(score,1,VecDeque::new()))
+                let mut mvs = VecDeque::new();
+
+                gs.m.map(|m| mvs.push_front(m));
+
+                Ok(EvaluationResult::Value(score,1,mvs))
             } else {
                 Err(ApplicationError::LogicError(String::from(
                     "Evaluated board information not found"
