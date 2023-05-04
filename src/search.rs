@@ -725,10 +725,10 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         }
                     }
                 }
-            } else if evalutor.active_threads() > 0 {
-                threads -= 1;
             } else {
-                break;
+                return Err(ApplicationError::InvalidStateError(String::from(
+                    "The queue is empty."
+                )));
             }
         }
 
