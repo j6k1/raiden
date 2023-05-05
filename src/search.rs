@@ -381,7 +381,7 @@ impl GameNode {
         if self.nodes > 0 && self.mate_nodes == self.childlren.len() {
             Score::NEGINFINITE
         } else if self.nodes == 0 {
-            Score::NEGINFINITE
+            Score::INFINITE
         } else {
             match self.win {
                 Score::INFINITE => Score::INFINITE,
@@ -430,7 +430,7 @@ impl PartialOrd for GameNode {
         let r = other.computed_score();
 
         l.partial_cmp(&r).map(|r| {
-            r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
+            r.then((self as *const GameNode).cmp(&(other as *const GameNode)))
         })
     }
 }
