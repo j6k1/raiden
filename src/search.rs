@@ -609,7 +609,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         node.win = node.win + win;
                         node.nodes += nodes;
 
-                        if n.computed_score() == Score::NEGINFINITE {
+                        if n.computed_score() == Score::INFINITE {
                             node.childlren.push(n);
                             break;
                         } else {
