@@ -626,7 +626,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             win
                         };
 
-                        node.win = node.win + win;
+                        node.win = node.win + -win;
                         node.nodes += nodes;
 
                         if n.computed_score() == Score::INFINITE {
@@ -891,7 +891,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                             win
                                         };
 
-                                        node.win = node.win + win;
+                                        node.win = node.win + -win;
                                         node.nodes += nodes;
 
                                         pm.map(|m| mvs.push_front(m));
