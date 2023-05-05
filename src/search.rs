@@ -255,7 +255,7 @@ impl Add for Score {
         match (self,other) {
             (Score::INFINITE,_) => Score::INFINITE,
             (Score::Value(l),Score::Value(r)) => Score::Value(l + r),
-            (Score::Value(s),Score::NEGINFINITE) => Score::Value(s - 1.),
+            (Score::Value(_),Score::NEGINFINITE) => Score::NEGINFINITE,
             (Score::Value(_),Score::INFINITE) => Score::INFINITE,
             (Score::NEGINFINITE,_) => Score::NEGINFINITE
         }
@@ -379,7 +379,7 @@ impl GameNode {
 
     pub fn computed_score(&self) -> Score {
         if self.nodes > 0 && self.mate_nodes == self.childlren.len() {
-            Score::INFINITE
+            Score::NEGINFINITE
         } else if self.nodes == 0 {
             Score::NEGINFINITE
         } else {
@@ -594,9 +594,17 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             self.send_info(env, &pv, -n.computed_score())?;
                         }
 
-                        if win == Score::NEGINFINITE {
+                        let win = if win == Score::INFINITE && nodes > 0 {
                             node.mate_nodes += 1;
-                        }
+
+                            if node.mate_nodes == node.childlren.len() {
+                                win
+                            } else {
+                                Score::Value(-1.)
+                            }
+                        } else {
+                            win
+                        };
 
                         node.win = node.win + -win;
                         node.nodes += nodes;
@@ -849,13 +857,13 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                     },
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
-                                        let win = if win == Score::NEGINFINITE && nodes > 0 {
+                                        let win = if win == Score::INFINITE && nodes > 0 {
                                             node.mate_nodes += 1;
 
                                             if node.mate_nodes == childlren_len {
                                                 win
                                             } else {
-                                                Score::Value(-1.)
+                                                Score::Value(1.)
                                             }
                                         } else {
                                             win
