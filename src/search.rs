@@ -586,12 +586,12 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                 match r {
                     RootEvaluationResult::Value(n, win, nodes,  mvs) => {
-                        if n.nodes > 0 && best_score <= -n.computed_score() {
-                            best_score = -n.computed_score();
+                        if n.nodes > 0 && best_score <= n.computed_score() {
+                            best_score = n.computed_score();
 
                             let pv = mvs.clone();
 
-                            self.send_info(env, &pv, -n.computed_score())?;
+                            self.send_info(env, &pv, n.computed_score())?;
                         }
 
                         let win = if win == Score::INFINITE && nodes > 0 {
@@ -606,7 +606,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             win
                         };
 
-                        node.win = node.win + -win;
+                        node.win = node.win + win;
                         node.nodes += nodes;
 
                         if n.computed_score() == Score::NEGINFINITE {
@@ -869,7 +869,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                             win
                                         };
 
-                                        node.win = node.win + -win;
+                                        node.win = node.win + win;
                                         node.nodes += nodes;
 
                                         pm.map(|m| mvs.push_front(m));
