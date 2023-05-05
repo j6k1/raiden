@@ -744,7 +744,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         } else {
             self.termination(env, node, evalutor)?;
 
-            Ok(EvaluationResult::Value(node.computed_score(), node.nodes, node.best_moves()))
+            Ok(EvaluationResult::Value(-node.computed_score(), node.nodes, node.best_moves()))
         }
     }
 }
