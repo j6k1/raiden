@@ -547,7 +547,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
             BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
-                node.win = -win;
+                node.win = win;
                 node.nodes = nodes;
 
                 return Ok(EvaluationResult::Value(win,nodes,mvs));
@@ -559,7 +559,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
             },
             BeforeSearchResult::Terminate(Some(win)) => {
-                node.win = -win;
+                node.win = win;
                 node.nodes = 1;
 
                 return Ok(EvaluationResult::Value(win,1,VecDeque::new()));
@@ -617,7 +617,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         let win = if win == Score::INFINITE && nodes > 0 {
                             node.mate_nodes += 1;
 
-                            if node.mate_nodes == node.childlren.len() {
+                            if node.mate_nodes == mvs_count {
                                 win
                             } else {
                                 Score::Value(1.)
@@ -911,7 +911,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
         } else {
             let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
                 BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mut mvs)) => {
-                    node.win = -win;
+                    node.win = win;
                     node.nodes = nodes;
 
                     gs.m.map(|m| mvs.push_front(m));
@@ -929,7 +929,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                     return Ok(EvaluationResult::Value(Score::Value(0.), 0, mvs));
                 },
                 BeforeSearchResult::Terminate(Some(win)) => {
-                    node.win = -win;
+                    node.win = win;
                     node.nodes = 1;
 
                     let mut mvs = VecDeque::new();
