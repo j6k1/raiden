@@ -378,9 +378,7 @@ impl GameNode {
     }
 
     pub fn computed_score(&self) -> Score {
-        if self.nodes > 0 && self.mate_nodes == self.childlren.len() {
-            Score::NEGINFINITE
-        } else if self.nodes == 0 {
+        if self.nodes == 0 {
             Score::INFINITE
         } else {
             match self.win {
@@ -393,7 +391,7 @@ impl GameNode {
         }
     }
 
-    pub fn best_moves(&mut self) -> VecDeque<LegalMove> {
+    fn best_moves_recur(&mut self) -> VecDeque<LegalMove> {
         while let Some(mut n) = self.childlren.pop() {
             if n.nodes > 0 {
                 if n.childlren.len() == 0 {
@@ -403,7 +401,7 @@ impl GameNode {
 
                     return mvs
                 } else {
-                    let mut mvs = n.best_moves();
+                    let mut mvs = n.best_moves_recur();
 
                     n.m.map(|m| mvs.push_front(m));
 
@@ -417,6 +415,28 @@ impl GameNode {
         self.m.map(|m| mvs.push_front(m));
 
         return mvs
+    }
+
+    pub fn best_moves(&mut self) -> (Score,VecDeque<LegalMove>) {
+        while let Some(mut n) = self.childlren.pop() {
+            if n.nodes > 0 {
+                if n.childlren.len() == 0 {
+                    let mut mvs = VecDeque::new();
+
+                    n.m.map(|m| mvs.push_front(m));
+
+                    return (n.computed_score(), mvs)
+                } else {
+                    let mut mvs = n.best_moves_recur();
+
+                    n.m.map(|m| mvs.push_front(m));
+
+                    return (n.computed_score(), mvs)
+                }
+            }
+        }
+
+        (Score::NEGINFINITE,VecDeque::new())
     }
 }
 impl Ord for GameNode {
@@ -602,8 +622,6 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             } else {
                                 Score::Value(1.)
                             }
-                        } else if win == Score::NEGINFINITE {
-                            Score::Value(-1.)
                         } else {
                             win
                         };
@@ -746,7 +764,9 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         } else {
             self.termination(env, node, evalutor)?;
 
-            Ok(EvaluationResult::Value(-node.computed_score(), node.nodes, node.best_moves()))
+            let (score,mvs) = node.best_moves();
+
+            Ok(EvaluationResult::Value(score, node.nodes, mvs))
         }
     }
 }
@@ -867,8 +887,6 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                             } else {
                                                 Score::Value(1.)
                                             }
-                                        } else if win == Score::NEGINFINITE {
-                                            Score::Value(-1.)
                                         } else {
                                             win
                                         };
