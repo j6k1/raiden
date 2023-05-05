@@ -602,6 +602,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             } else {
                                 Score::Value(1.)
                             }
+                        } else if win == Score::NEGINFINITE {
+                            Score::Value(-1.)
                         } else {
                             win
                         };
@@ -663,7 +665,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             node.childlren.push(game_node);
 
                             node.mate_nodes += 1;
-                            node.win = node.win + Score::Value(-1.);
+                            node.win = node.win + Score::Value(1.);
                             node.nodes += 1;
 
                             continue;
@@ -817,7 +819,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                             game_node.win = Score::INFINITE;
 
                             node.mate_nodes += 1;
-                            node.win = node.win + Score::Value(-1.);
+                            node.win = node.win + Score::Value(1.);
                             node.nodes += 1;
 
                             let mut mvs = VecDeque::new();
@@ -865,6 +867,8 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                             } else {
                                                 Score::Value(1.)
                                             }
+                                        } else if win == Score::NEGINFINITE {
+                                            Score::Value(-1.)
                                         } else {
                                             win
                                         };
