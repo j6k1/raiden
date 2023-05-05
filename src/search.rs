@@ -586,12 +586,12 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                 match r {
                     RootEvaluationResult::Value(n, win, nodes,  mvs) => {
-                        if n.nodes > 0 && best_score <= -n.computed_score() {
+                        if n.nodes > 0 && best_score <= n.computed_score() {
                             best_score = -n.computed_score();
 
                             let pv = mvs.clone();
 
-                            self.send_info(env, &pv, -n.computed_score())?;
+                            self.send_info(env, &pv, n.computed_score())?;
                         }
 
                         let win = if win == Score::INFINITE && nodes > 0 {
@@ -600,7 +600,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             if node.mate_nodes == node.childlren.len() {
                                 win
                             } else {
-                                Score::Value(-1.)
+                                Score::Value(1.)
                             }
                         } else {
                             win
