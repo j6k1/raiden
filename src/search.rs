@@ -614,7 +614,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             self.send_info(env, &pv, -n.computed_score())?;
                         }
 
-                        let win = if win == Score::INFINITE && nodes > 0 {
+                        let win = if n.nodes > 0 && n.computed_score() == Score::INFINITE {
                             node.mate_nodes += 1;
 
                             if node.mate_nodes == mvs_count {
@@ -879,7 +879,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
                                     },
                                     EvaluationResult::Value(win, nodes,  mut mvs) => {
-                                        let win = if win == Score::INFINITE && nodes > 0 {
+                                        let win = if game_node.nodes > 0 && game_node.computed_score() == Score::INFINITE {
                                             node.mate_nodes += 1;
 
                                             if node.mate_nodes == childlren_len {
