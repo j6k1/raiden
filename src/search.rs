@@ -695,7 +695,14 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             node.childlren.push(game_node);
 
                             node.mate_nodes += 1;
-                            node.win = node.win + Score::Value(1.);
+
+                            if node.mate_nodes == mvs_count {
+                                node.win = Score::NEGINFINITE;
+                                break;
+                            } else {
+                                node.win = node.win + Score::Value(-1.);
+                            }
+
                             node.nodes += 1;
 
                             continue;
@@ -828,7 +835,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
         let mut gs = gs;
 
         if node.nodes > 0 {
-            let childlren_len = node.childlren.len();
+            let mvs_count = node.childlren.len();
 
             if let Some(mut game_node) = node.childlren.peek_mut() {
                 let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
@@ -851,14 +858,21 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                             game_node.win = Score::INFINITE;
 
                             node.mate_nodes += 1;
-                            node.win = node.win + Score::Value(1.);
+
+                            let win = if node.mate_nodes == mvs_count {
+                                Score::NEGINFINITE
+                            } else {
+                                node.win + Score::Value(-1.)
+                            };
+
+                            node.win = win;
                             node.nodes += 1;
 
                             let mut mvs = VecDeque::new();
 
                             gs.m.map(|m| mvs.push_front(m));
 
-                            return Ok(EvaluationResult::Value(Score::Value(-1.),1,mvs));
+                            return Ok(EvaluationResult::Value(win,1,mvs));
                         }
 
                         let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
@@ -894,7 +908,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         let win = if game_node.nodes > 0 && game_node.computed_score() == Score::INFINITE {
                                             node.mate_nodes += 1;
 
-                                            if node.mate_nodes == childlren_len {
+                                            if node.mate_nodes == mvs_count {
                                                 win
                                             } else {
                                                 Score::Value(1.)
