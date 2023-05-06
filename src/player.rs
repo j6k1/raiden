@@ -353,7 +353,7 @@ impl USIPlayer<ApplicationError> for Raiden {
                 let bestmove = match result {
                     Err(ref e) => {
                         let _ = env.on_error_handler.lock().map(|h| h.call(e));
-                        strategy.send_message(&mut env,format!("{}",e).as_str())?;
+                        self.send_message_immediate(&mut env,format!("{}",e).as_str())?;
                         BestMove::Resign
                     },
                     Ok(EvaluationResult::Timeout) => {
