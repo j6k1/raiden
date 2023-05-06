@@ -454,9 +454,7 @@ impl PartialOrd for GameNode {
         let r = other.computed_score();
 
         if l == Score::NEGINFINITE && r == Score::NEGINFINITE {
-            self.nodes.partial_cmp(&other.nodes).map(|r| {
-                r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
-            })
+           Some(self.nodes.cmp(&other.nodes).reverse().then((self as *const GameNode).cmp(&(other as *const GameNode))))
         } else {
             l.partial_cmp(&r).map(|r| {
                 r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
@@ -605,7 +603,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut best_score = Score::NEGINFINITE;
 
         loop {
-            if threads == 0 {
+            let is_mate = node.childlren.peek().map(|n| {
+                n.nodes > 0 && n.computed_score() == Score::INFINITE
+            }).unwrap_or(true);
+
+            if threads == 0 || is_mate {
                 let r = self.receiver.recv();
 
                 evalutor.on_end_thread()?;
@@ -639,7 +641,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         node.win = node.win + -win;
                         node.nodes += nodes;
 
-                        if n.nodes > 0 && n.computed_score() == Score::NEGINFINITE {
+                        if n.nodes > 0 && (win == Score::INFINITE || n.computed_score() == Score::NEGINFINITE) {
                             node.childlren.push(n);
                             break;
                         } else {
