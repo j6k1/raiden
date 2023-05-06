@@ -177,7 +177,11 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         } else {
             let mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
-            mvs
+            if mvs.len() == 0 {
+                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
+            } else {
+                mvs
+            }
         };
 
         if self.end_of_search(env) {
@@ -449,9 +453,15 @@ impl PartialOrd for GameNode {
         let l = self.computed_score();
         let r = other.computed_score();
 
-        l.partial_cmp(&r).map(|r| {
-            r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
-        })
+        if l == Score::NEGINFINITE && r == Score::NEGINFINITE {
+            self.nodes.partial_cmp(&other.nodes).map(|r| {
+                r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
+            })
+        } else {
+            l.partial_cmp(&r).map(|r| {
+                r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
+            })
+        }
     }
 }
 impl Eq for GameNode {}
