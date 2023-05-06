@@ -379,7 +379,7 @@ impl GameNode {
 
     pub fn computed_score(&self) -> Score {
         if self.nodes == 0 {
-            Score::INFINITE
+            Score::NEGINFINITE
         } else {
             match self.win {
                 Score::INFINITE => Score::INFINITE,
@@ -425,13 +425,13 @@ impl GameNode {
 
                     n.m.map(|m| mvs.push_front(m));
 
-                    return (n.computed_score(), mvs)
+                    return (-n.computed_score(), mvs)
                 } else {
                     let mut mvs = n.best_moves_recur();
 
                     n.m.map(|m| mvs.push_front(m));
 
-                    return (n.computed_score(), mvs)
+                    return (-n.computed_score(), mvs)
                 }
             }
         }
@@ -450,7 +450,7 @@ impl PartialOrd for GameNode {
         let r = other.computed_score();
 
         l.partial_cmp(&r).map(|r| {
-            r.then((self as *const GameNode).cmp(&(other as *const GameNode)))
+            r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))
         })
     }
 }
@@ -606,12 +606,12 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                 match r {
                     RootEvaluationResult::Value(n, win, nodes,  mvs) => {
-                        if n.nodes > 0 && best_score <= n.computed_score() {
-                            best_score = n.computed_score();
+                        if n.nodes > 0 && best_score <= -n.computed_score() {
+                            best_score = -n.computed_score();
 
                             let pv = mvs.clone();
 
-                            self.send_info(env, &pv, n.computed_score())?;
+                            self.send_info(env, &pv, -n.computed_score())?;
                         }
 
                         let win = if win == Score::INFINITE && nodes > 0 {
@@ -629,7 +629,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         node.win = node.win + -win;
                         node.nodes += nodes;
 
-                        if n.computed_score() == Score::INFINITE {
+                        if n.nodes > 0 && n.computed_score() == Score::NEGINFINITE {
                             node.childlren.push(n);
                             break;
                         } else {
