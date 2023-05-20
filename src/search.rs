@@ -394,54 +394,6 @@ impl GameNode {
             }
         }
     }
-
-    fn best_moves_recur(&mut self) -> VecDeque<LegalMove> {
-        while let Some(mut n) = self.childlren.pop() {
-            if n.nodes > 0 {
-                if n.childlren.len() == 0 {
-                    let mut mvs = VecDeque::new();
-
-                    n.m.map(|m| mvs.push_front(m));
-
-                    return mvs
-                } else {
-                    let mut mvs = n.best_moves_recur();
-
-                    n.m.map(|m| mvs.push_front(m));
-
-                    return mvs
-                }
-            }
-        }
-
-        let mut mvs = VecDeque::new();
-
-        self.m.map(|m| mvs.push_front(m));
-
-        return mvs
-    }
-
-    pub fn best_moves(&mut self) -> (Score,VecDeque<LegalMove>) {
-        while let Some(mut n) = self.childlren.pop() {
-            if n.nodes > 0 {
-                if n.childlren.len() == 0 {
-                    let mut mvs = VecDeque::new();
-
-                    n.m.map(|m| mvs.push_front(m));
-
-                    return (-n.computed_score(), mvs)
-                } else {
-                    let mut mvs = n.best_moves_recur();
-
-                    n.m.map(|m| mvs.push_front(m));
-
-                    return (-n.computed_score(), mvs)
-                }
-            }
-        }
-
-        (Score::NEGINFINITE,VecDeque::new())
-    }
 }
 impl Ord for GameNode {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -601,6 +553,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut is_timeout = false;
 
         let mut best_score = Score::NEGINFINITE;
+        let mut best_moves = VecDeque::new();
 
         loop {
             let is_mate = node.childlren.peek().map(|n| {
@@ -621,9 +574,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         if n.nodes > 0 && best_score <= -n.computed_score() {
                             best_score = -n.computed_score();
 
-                            let pv = mvs.clone();
+                            let pv = mvs;
 
                             self.send_info(env, &pv, -n.computed_score())?;
+
+                            best_moves = pv;
                         }
 
                         let win = if n.nodes > 0 && n.computed_score() == Score::INFINITE {
@@ -783,9 +738,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         } else {
             self.termination(env, node, evalutor)?;
 
-            let (score,mvs) = node.best_moves();
-
-            Ok(EvaluationResult::Value(score, node.nodes, mvs))
+            Ok(EvaluationResult::Value(best_score, node.nodes, best_moves))
         }
     }
 }
