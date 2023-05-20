@@ -185,11 +185,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
                 return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
                 mvs.sort_by(|&a,&b| {
-                    Rule::is_oute_move(&gs.state,gs.teban,a).cmp(
-                        &Rule::is_oute_move(&gs.state,gs.teban,b)
-                    ).reverse().then_with(|| {
-                        attack_priority(gs.teban,&gs.state,a).cmp(&attack_priority(gs.teban,&gs.state,b))
-                    })
+                    attack_priority(gs.teban,&gs.state,a).cmp(&attack_priority(gs.teban,&gs.state,b))
                 });
                 mvs
             }

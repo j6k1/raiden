@@ -1,6 +1,6 @@
 use std::cmp;
 use usiagent::rule::{LegalMove, Rule, Square, State};
-use usiagent::shogi::KomaKind::{SFu, SKaku, SHisha, GFu, GKaku, GHisha};
+use usiagent::shogi::KomaKind::{SFu, SKaku, SHisha, GFu, GKaku, GHisha, Blank, SKin, GKin, SGin, GGin};
 use usiagent::shogi::{KomaKind, ObtainKind, Teban};
 
 #[inline]
@@ -11,56 +11,96 @@ pub fn attack_priority(teban:Teban,state:&State,m:LegalMove) -> i32 {
         0
     ];
 
-    let mut value = 0;
+    if Rule::is_oute_move(state,teban,m) {
+        let mut value = 0;
 
-    match m {
-        LegalMove::To(m) if !m.is_nari() => {
-            let x = m.src() / 9;
-            let y = m.src() - x * 9;
+        match m {
+            LegalMove::To(m) if !m.is_nari() => {
+                let x = m.src() / 9;
+                let y = m.src() - x * 9;
 
-            let kind = state.get_banmen().0[y as usize][x as usize];
+                let kind = state.get_banmen().0[y as usize][x as usize];
 
-            match kind {
-                SFu | SKaku | SHisha |
-                GFu | GKaku | GHisha if Rule::is_possible_nari(kind,m.src() as Square,m.dst() as Square) => {
-                    value += 100;
-                },
-                _ => ()
+                match kind {
+                    SFu | SKaku | SHisha |
+                    GFu | GKaku | GHisha if Rule::is_possible_nari(kind, m.src() as Square, m.dst() as Square) => {
+                        value += 100;
+                    },
+                    _ => ()
+                }
+            },
+            _ => ()
+        }
+
+        let kind = match m {
+            LegalMove::To(m) if m.is_nari() => {
+                let x = m.src() / 9;
+                let y = m.src() - x * 9;
+
+                state.get_banmen().0[y as usize][x as usize].to_nari() as usize
+            },
+            LegalMove::To(m) => {
+                let x = m.src() / 9;
+                let y = m.src() - x * 9;
+
+                state.get_banmen().0[y as usize][x as usize] as usize
+            },
+            LegalMove::Put(m) => {
+                m.kind() as usize
             }
-        },
-        _ => ()
-    }
+        };
 
-    let kind = match m {
-        LegalMove::To(m) if m.is_nari() => {
-            let x = m.src() / 9;
-            let y = m.src() - x * 9;
+        value -= KPT_VALUES[kind];
 
-            state.get_banmen().0[y as usize][x as usize].to_nari() as usize
-        },
-        LegalMove::To(m) => {
-            let x = m.src() / 9;
-            let y = m.src() - x * 9;
-
-            state.get_banmen().0[y as usize][x as usize] as usize
-        },
-        LegalMove::Put(m) => {
-            m.kind() as usize
+        match m {
+            LegalMove::To(m) => {
+                value += dist(Rule::ou_square(teban, state), m.dst() as Square);
+            },
+            LegalMove::Put(m) => {
+                value += dist(Rule::ou_square(teban, state), m.dst() as Square);
+            }
         }
-    };
 
-    value -= KPT_VALUES[kind];
+        value
+    } else {
+        let mut value = 0;
 
-    match m {
-        LegalMove::To(m) => {
-            value += dist(Rule::ou_square(teban,state),m.dst() as Square);
-        },
-        LegalMove::Put(m) => {
-            value += dist(Rule::ou_square(teban,state),m.dst() as Square);
+        let to = match m {
+            LegalMove::To(m) => m.dst() as Square,
+            LegalMove::Put(m) => m.dst() as Square
+        };
+
+        let attack_support = Rule::control_count(teban,state,to);
+        let defense_support = Rule::control_count(teban.opposite(),state,to);
+
+        if defense_support >= 2 {
+            value += 1;
         }
-    }
 
-    value
+        let bonus = match m {
+            LegalMove::Put(_) => 1,
+            _ => 0
+        };
+
+        let x = to / 9;
+        let y = to - x * 9;
+
+        let obtained = state.get_banmen().0[y as usize][x as usize];
+
+        if attack_support + bonus > defense_support {
+            value -= 1;
+        } else if obtained != Blank {
+            if obtained == SKin || obtained == GKin || obtained == SGin || obtained == GGin {
+                value -= 1;
+            } else {
+                value += 1;
+            }
+        } else {
+            value += 1;
+        }
+
+        value
+    }
 }
 #[inline]
 pub fn defense_priority(_:Teban,state:&State,m:LegalMove) -> i32 {
