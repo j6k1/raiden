@@ -17,6 +17,7 @@ use usiagent::player::InfoSender;
 use usiagent::rule::{LegalMove, Rule, State};
 use usiagent::shogi::{MochigomaCollections, MochigomaKind, ObtainKind, Teban};
 use crate::error::{ApplicationError};
+use crate::initial_estimation::{attack_priority, defense_priority};
 use crate::nn::Evalutor;
 
 pub const TURN_LIMIT:u32 = 1000;
@@ -167,19 +168,29 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         }
 
         let mvs = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
-            let mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
+            let mut mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
                 return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
+                mvs.sort_by(|&a,&b| {
+                    defense_priority(gs.teban,&gs.state,a).cmp(&defense_priority(gs.teban,&gs.state,b))
+                });
                 mvs
             }
         } else {
-            let mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
+            let mut mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
                 return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
+                mvs.sort_by(|&a,&b| {
+                    Rule::is_oute_move(&gs.state,gs.teban,a).cmp(
+                        &Rule::is_oute_move(&gs.state,gs.teban,b)
+                    ).reverse().then_with(|| {
+                        attack_priority(gs.teban,&gs.state,a).cmp(&attack_priority(gs.teban,&gs.state,b))
+                    })
+                });
                 mvs
             }
         };
