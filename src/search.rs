@@ -167,27 +167,21 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::INFINITE,1,mvs)));
         }
 
-        let mvs = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
-            let mut mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
+        let (mvs,defense) = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
+            let mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
                 return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
-                mvs.sort_by(|&a,&b| {
-                    defense_priority(gs.teban,&gs.state,a).cmp(&defense_priority(gs.teban,&gs.state,b))
-                });
-                mvs
+                (mvs,true)
             }
         } else {
-            let mut mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
+            let mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
                 return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
             } else {
-                mvs.sort_by(|&a,&b| {
-                    attack_priority(gs.teban,&gs.state,a).cmp(&attack_priority(gs.teban,&gs.state,b))
-                });
-                mvs
+                (mvs,false)
             }
         };
 
@@ -210,7 +204,11 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             let mhash = env.hasher.calc_main_hash(gs.mhash,gs.teban,gs.state.get_banmen(),gs.mc,m.to_applied_move(),&o);
             let shash = env.hasher.calc_sub_hash(gs.shash,gs.teban,gs.state.get_banmen(),gs.mc,m.to_applied_move(),&o);
 
-            node.childlren.push(Box::new(GameNode::new(Some(m),mhash,shash)));
+            if defense {
+                node.childlren.push(Box::new(GameNode::new(Some(m), mhash, shash, defense_priority(gs.teban,&gs.state,m))));
+            } else {
+                node.childlren.push(Box::new(GameNode::new(Some(m), mhash, shash, attack_priority(gs.teban,&gs.state,m))));
+            }
 
             if !env.kyokumen_map.contains_key(&(gs.teban,mhash,shash)) {
                 let (s,r) = mpsc::channel();
@@ -369,6 +367,7 @@ pub struct GameState<'a> {
 pub struct GameNode {
     win:Score,
     nodes:u64,
+    asc_priority:i32,
     mate_nodes:usize,
     m:Option<LegalMove>,
     mhash:u64,
@@ -376,10 +375,11 @@ pub struct GameNode {
     childlren:BinaryHeap<Box<GameNode>>
 }
 impl GameNode {
-    pub fn new(m:Option<LegalMove>,mhash:u64,shash:u64) -> GameNode {
+    pub fn new(m:Option<LegalMove>,mhash:u64,shash:u64,asc_priority:i32) -> GameNode {
         GameNode {
             win:Score::Value(0.),
             nodes:0,
+            asc_priority:asc_priority,
             mate_nodes:0,
             m:m,
             mhash:mhash,
@@ -413,7 +413,9 @@ impl PartialOrd for GameNode {
         let r = other.computed_score();
 
         if l == Score::NEGINFINITE && r == Score::NEGINFINITE {
-           Some(self.nodes.cmp(&other.nodes).reverse().then((self as *const GameNode).cmp(&(other as *const GameNode))))
+           Some(self.nodes.cmp(&other.nodes)
+                          .then(self.asc_priority.cmp(&other.asc_priority))
+                          .reverse().then((self as *const GameNode).cmp(&(other as *const GameNode))))
         } else {
             l.partial_cmp(&r).map(|r| {
                 r.reverse().then((self as *const GameNode).cmp(&(other as *const GameNode)))

@@ -348,7 +348,7 @@ impl USIPlayer<ApplicationError> for Raiden {
 
                 let strategy  = Root::new();
 
-                let result = strategy.search(&mut env,&mut gs, &mut GameNode::new(None,mhash,shash), &mut event_dispatcher, evalutor);
+                let result = strategy.search(&mut env,&mut gs, &mut GameNode::new(None,mhash,shash,0), &mut event_dispatcher, evalutor);
 
                 let bestmove = match result {
                     Err(ref e) => {
