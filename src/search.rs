@@ -424,6 +424,27 @@ impl GameNode {
 
         mvs
     }
+
+    pub fn best_score(&mut self) -> Score {
+        let mut nodes = VecDeque::new();
+        let mut score = Score::NEGINFINITE;
+
+        while let Some(n) = self.childlren.pop() {
+            if n.nodes > 0 {
+                score = -n.computed_score();
+                nodes.push_front(n);
+                break;
+            } else {
+                nodes.push_front(n);
+            }
+        }
+
+        while let Some(n) = nodes.pop_front() {
+            self.childlren.push(n);
+        }
+
+        score
+    }
 }
 impl Ord for GameNode {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -563,7 +584,6 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut is_timeout = false;
 
         let mut best_score = Score::NEGINFINITE;
-        let mut best_moves = VecDeque::new();
         let mut completed = false;
 
         loop {
@@ -592,8 +612,6 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             let pv = n.best_moves();
 
                             self.send_info(env, &pv, -n.computed_score())?;
-
-                            best_moves = pv;
                         }
 
                         let win = if n.nodes > 0 && n.computed_score() == Score::INFINITE {
@@ -751,9 +769,14 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             }
         }
 
+        let best_score = node.best_score();
+        let best_moves = node.best_moves();
+
         if is_timeout && best_moves.is_empty() {
             Ok(EvaluationResult::Timeout)
         } else {
+            self.send_info(env,&best_moves,best_score)?;
+
             Ok(EvaluationResult::Value(best_score, node.nodes, best_moves))
         }
     }
