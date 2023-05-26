@@ -152,7 +152,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         }
 
         if let Some(ObtainKind::Ou) = gs.obtained {
-            return Ok(BeforeSearchResult::Terminate(Some(Score::Value(0.))));
+            return Ok(BeforeSearchResult::Terminate(Some(Score::NEGINFINITE)));
         }
 
         let mvs = Rule::win_only_moves(gs.teban,&gs.state);
@@ -401,6 +401,29 @@ impl GameNode {
             }
         }
     }
+
+    pub fn best_moves(&mut self) -> VecDeque<LegalMove> {
+        let mut nodes = VecDeque::new();
+        let mut mvs = VecDeque::new();
+
+        while let Some(mut n) = self.childlren.pop() {
+            if n.nodes > 0 {
+                mvs = n.best_moves();
+                nodes.push_front(n);
+                break;
+            } else {
+                nodes.push_front(n);
+            }
+        }
+
+        self.m.map(|m| mvs.push_front(m));
+
+        while let Some(n) = nodes.pop_front() {
+            self.childlren.push(n);
+        }
+
+        mvs
+    }
 }
 impl Ord for GameNode {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -485,28 +508,6 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         event_dispatcher
     }
 
-    pub fn termination<'a,'b>(&self,
-                       env:&mut Environment<L,S>,
-                       node:&mut GameNode,
-                       evalutor: &Evalutor) -> Result<(),ApplicationError> {
-        env.stop.store(true,atomic::Ordering::Release);
-
-        while evalutor.active_threads() > 0 {
-            match self.receiver.recv().map_err(|e| ApplicationError::from(e)).and_then(|r| r)? {
-                RootEvaluationResult::Value(mut n,s, nodes, _) => {
-                    n.nodes += nodes;
-                    n.win = n.win + -s;
-
-                    node.childlren.push(n);
-                },
-                _ => ()
-            }
-            evalutor.on_end_thread().map_err(|e| ApplicationError::from(e))?;
-        }
-
-        Ok(())
-    }
-
     fn parallelized<'a,'b>(&self,env:&mut Environment<L,S>,
                            gs:&mut GameState<'a>,
                            node:&mut GameNode,
@@ -563,13 +564,14 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         let mut best_score = Score::NEGINFINITE;
         let mut best_moves = VecDeque::new();
+        let mut completed = false;
 
         loop {
-            let is_mate = node.childlren.peek().map(|n| {
-                n.nodes > 0 && n.computed_score() == Score::INFINITE
-            }).unwrap_or(true);
+            if (completed || is_timeout) && evalutor.active_threads() == 0 {
+                break;
+            }
 
-            if threads == 0 || is_mate {
+            if threads == 0 || completed || is_timeout {
                 let r = self.receiver.recv();
 
                 evalutor.on_end_thread()?;
@@ -579,11 +581,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 threads += 1;
 
                 match r {
-                    RootEvaluationResult::Value(n, win, nodes,  mvs) => {
+                    RootEvaluationResult::Value(mut n, win, nodes,  _) => {
                         if n.nodes > 0 && best_score <= -n.computed_score() {
                             best_score = -n.computed_score();
 
-                            let pv = mvs;
+                            let pv = n.best_moves();
 
                             self.send_info(env, &pv, -n.computed_score())?;
 
@@ -607,23 +609,24 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                         if n.nodes > 0 && (win == Score::INFINITE || n.computed_score() == Score::NEGINFINITE) {
                             node.childlren.push(n);
-                            break;
+                            completed = true;
+                            env.stop.store(true,atomic::Ordering::Release);
                         } else {
                             node.childlren.push(n);
                         }
 
                         if self.end_of_search(env) {
-                            break;
+                            completed = true;
+                            env.stop.store(true,atomic::Ordering::Release);
                         } else if self.timelimit_reached(env) || self.timeout_expected(env) || env.stop.load(atomic::Ordering::Acquire) {
                             is_timeout = true;
-                            break;
+                            env.stop.store(true,atomic::Ordering::Release);
                         }
                     },
                     RootEvaluationResult::Timeout(n) => {
                         node.childlren.push(n);
-
                         is_timeout = true;
-                        break;
+                        env.stop.store(true,atomic::Ordering::Release);
                     }
                 }
 
@@ -631,10 +634,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 event_dispatcher.dispatch_events(self,&*event_queue)?;
 
                 if self.end_of_search(env) {
-                    break;
+                    completed = true;
+                    env.stop.store(true,atomic::Ordering::Release);
                 } else if self.timelimit_reached(env) || self.timeout_expected(env) || env.stop.load(atomic::Ordering::Acquire) {
                     is_timeout = true;
-                    break;
+                    env.stop.store(true,atomic::Ordering::Release);
                 }
             } else if let Some(mut game_node) = node.childlren.pop() {
                 let m = game_node.m.ok_or(ApplicationError::InvalidStateError(
@@ -662,7 +666,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                             if node.mate_nodes == mvs_count {
                                 node.win = Score::NEGINFINITE;
-                                break;
+                                completed = true;
+                                env.stop.store(true,atomic::Ordering::Release);
                             } else {
                                 node.win = node.win + Score::Value(-1.);
                             }
@@ -745,8 +750,6 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         if is_timeout {
             Ok(EvaluationResult::Timeout)
         } else {
-            self.termination(env, node, evalutor)?;
-
             Ok(EvaluationResult::Value(best_score, node.nodes, best_moves))
         }
     }
