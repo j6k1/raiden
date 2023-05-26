@@ -28,10 +28,12 @@ pub const TURN_COUNT:u32 = 50;
 pub const MIN_TURN_COUNT:u32 = 5;
 
 pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
+    type Output;
+
     fn search<'a,'b>(&self,env:&mut Environment<L,S>, gs:&mut GameState<'a>,
                      node: &mut GameNode,
                      event_dispatcher:&mut UserEventDispatcher<'b,Self,ApplicationError,L>,
-                     evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError>;
+                     evalutor: &Evalutor) -> Result<Self::Output,ApplicationError>;
 
     fn timelimit_reached(&self,env:&mut Environment<L,S>) -> bool {
         let network_delay = env.network_delay;
@@ -148,7 +150,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         if self.end_of_search(env) {
             return Ok(BeforeSearchResult::Terminate(None));
         } else if self.timelimit_reached(env) || self.timeout_expected(env) || env.stop.load(atomic::Ordering::Acquire) {
-            return Ok(BeforeSearchResult::Complete(EvaluationResult::Timeout));
+            return Ok(BeforeSearchResult::Timeout);
         }
 
         if let Some(ObtainKind::Ou) = gs.obtained {
@@ -164,14 +166,14 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 
             mvs.push_front(m);
 
-            return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::INFINITE,1,mvs)));
+            return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::INFINITE,1),mvs));
         }
 
         let (mvs,defense) = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
             let mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
-                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
+                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1),VecDeque::new()));
             } else {
                 (mvs,true)
             }
@@ -179,7 +181,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             let mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
-                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1,VecDeque::new())));
+                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1),VecDeque::new()));
             } else {
                 (mvs,false)
             }
@@ -188,7 +190,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         if self.end_of_search(env) {
             return Ok(BeforeSearchResult::Terminate(None));
         } else if self.timelimit_reached(env) || self.timeout_expected(env) || env.stop.load(atomic::Ordering::Acquire) {
-            return Ok(BeforeSearchResult::Complete(EvaluationResult::Timeout));
+            return Ok(BeforeSearchResult::Timeout);
         }
 
         let mut await_mvs = Vec::with_capacity(mvs.len());
@@ -226,17 +228,23 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 }
 #[derive(Debug)]
 pub enum EvaluationResult {
-    Value(Score,u64,VecDeque<LegalMove>),
+    Value(Score,u64),
     Timeout,
 }
 #[derive(Debug)]
 pub enum RootEvaluationResult {
-    Value(Box<GameNode>,Score,u64,VecDeque<LegalMove>),
+    Value(Score,u64,VecDeque<LegalMove>),
+    Timeout,
+}
+#[derive(Debug)]
+pub enum RecvEvaluationResult {
+    Value(Box<GameNode>,Score,u64),
     Timeout(Box<GameNode>),
 }
 #[derive(Debug)]
 pub enum BeforeSearchResult {
-    Complete(EvaluationResult),
+    Complete(EvaluationResult,VecDeque<LegalMove>),
+    Timeout,
     Terminate(Option<Score>),
     AsyncMvs(Vec<Receiver<(u64,u64,f32)>>),
 }
@@ -476,8 +484,8 @@ impl PartialEq for GameNode {
 pub struct Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
     l:PhantomData<L>,
     s:PhantomData<S>,
-    receiver:Receiver<Result<RootEvaluationResult, ApplicationError>>,
-    sender:Sender<Result<RootEvaluationResult, ApplicationError>>
+    receiver:Receiver<Result<RecvEvaluationResult, ApplicationError>>,
+    sender:Sender<Result<RecvEvaluationResult, ApplicationError>>
 }
 impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
     pub fn new() -> Root<L,S> {
@@ -533,27 +541,25 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                            gs:&mut GameState<'a>,
                            node:&mut GameNode,
                            event_dispatcher:&mut UserEventDispatcher<'b,Root<L,S>,ApplicationError,L>,
-                           evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError>  {
+                           evalutor: &Evalutor) -> Result<RootEvaluationResult,ApplicationError>  {
         let mut gs = gs;
 
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
-            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mvs)) => {
+            BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes),mvs) => {
                 node.win = win;
                 node.nodes = nodes;
 
-                return Ok(EvaluationResult::Value(win,nodes,mvs));
+                return Ok(RootEvaluationResult::Value(win,nodes,mvs));
             },
-            BeforeSearchResult::Complete(r) => {
-                return Ok(r);
-            },
-            BeforeSearchResult::Terminate(None) => {
-                return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+            BeforeSearchResult::Timeout | BeforeSearchResult::Terminate(None) |
+            BeforeSearchResult::Complete(EvaluationResult::Timeout,_) => {
+                return Ok(RootEvaluationResult::Timeout);
             },
             BeforeSearchResult::Terminate(Some(win)) => {
                 node.win = win;
                 node.nodes = 1;
 
-                return Ok(EvaluationResult::Value(win,1,VecDeque::new()));
+                return Ok(RootEvaluationResult::Value(win,1,VecDeque::new()));
             },
             BeforeSearchResult::AsyncMvs(mvs) => {
                 mvs
@@ -605,7 +611,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 threads += 1;
 
                 match r {
-                    RootEvaluationResult::Value(mut n, win, nodes,  _) => {
+                    RecvEvaluationResult::Value(mut n, win, nodes) => {
                         if n.nodes > 0 && best_score <= -n.computed_score() {
                             best_score = -n.computed_score();
 
@@ -645,7 +651,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             env.stop.store(true,atomic::Ordering::Release);
                         }
                     },
-                    RootEvaluationResult::Timeout(n) => {
+                    RecvEvaluationResult::Timeout(n) => {
                         node.childlren.push(n);
                         is_timeout = true;
                         env.stop.store(true,atomic::Ordering::Release);
@@ -745,11 +751,11 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                                             &mut event_dispatcher, &evalutor);
 
                                     let r = match r {
-                                        Ok(EvaluationResult::Value(win, nodes, mvs)) => {
-                                            Ok(RootEvaluationResult::Value(game_node, win, nodes, mvs))
+                                        Ok(EvaluationResult::Value(win, nodes)) => {
+                                            Ok(RecvEvaluationResult::Value(game_node, win, nodes))
                                         },
                                         Ok(EvaluationResult::Timeout) => {
-                                            Ok(RootEvaluationResult::Value(game_node, Score::Value(0.), 0, VecDeque::new()))
+                                            Ok(RecvEvaluationResult::Value(game_node, Score::Value(0.), 0))
                                         },
                                         Err(e) => Err(e)
                                     };
@@ -773,20 +779,22 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let best_moves = node.best_moves();
 
         if is_timeout && best_moves.is_empty() {
-            Ok(EvaluationResult::Timeout)
+            Ok(RootEvaluationResult::Timeout)
         } else {
             self.send_info(env,&best_moves,best_score)?;
 
-            Ok(EvaluationResult::Value(best_score, node.nodes, best_moves))
+            Ok(RootEvaluationResult::Value(best_score, node.nodes, best_moves))
         }
     }
 }
 impl<L,S> Search<L,S> for Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
+    type Output = RootEvaluationResult;
+
     fn search<'a,'b>(&self,env:&mut Environment<L,S>,
                      gs:&mut GameState<'a>,
                      node:&mut GameNode,
                      event_dispatcher:&mut UserEventDispatcher<'b,Root<L,S>,ApplicationError,L>,
-                     evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError> {
+                     evalutor: &Evalutor) -> Result<Self::Output,ApplicationError> {
         let r = self.parallelized(env,gs,node,event_dispatcher,evalutor);
 
         env.stop.store(true,atomic::Ordering::Release);
@@ -819,11 +827,13 @@ impl<L,S> Recursive<L,S> where L: Logger + Send + 'static, S: InfoSender {
     }
 }
 impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: InfoSender {
+    type Output = EvaluationResult;
+
     fn search<'a,'b>(&self,env:&mut Environment<L,S>,
                      gs:&mut GameState<'a>,
                      node: &mut GameNode,
                      event_dispatcher:&mut UserEventDispatcher<'b,Recursive<L,S>,ApplicationError,L>,
-                     evalutor: &Evalutor) -> Result<EvaluationResult,ApplicationError> {
+                     evalutor: &Evalutor) -> Result<Self::Output,ApplicationError> {
         let mut gs = gs;
 
         if node.nodes > 0 {
@@ -864,7 +874,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                             gs.m.map(|m| mvs.push_front(m));
 
-                            return Ok(EvaluationResult::Value(win,1,mvs));
+                            return Ok(EvaluationResult::Value(win,1));
                         }
 
                         let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
@@ -875,8 +885,6 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                         match next {
                             (state, mc) => {
-                                let pm = gs.m;
-
                                 let mut gs = GameState {
                                     teban: gs.teban.opposite(),
                                     state: &state,
@@ -894,9 +902,9 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                                 match strategy.search(env, &mut gs, &mut *game_node, event_dispatcher,evalutor)? {
                                     EvaluationResult::Timeout => {
-                                        return Ok(EvaluationResult::Value(Score::Value(0.),0,VecDeque::new()));
+                                        return Ok(EvaluationResult::Value(Score::Value(0.),0));
                                     },
-                                    EvaluationResult::Value(win, nodes,  mut mvs) => {
+                                    EvaluationResult::Value(win, nodes) => {
                                         let win = if game_node.nodes > 0 && game_node.computed_score() == Score::INFINITE {
                                             node.mate_nodes += 1;
 
@@ -912,9 +920,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         node.win = node.win + -win;
                                         node.nodes += nodes;
 
-                                        pm.map(|m| mvs.push_front(m));
-
-                                        Ok(EvaluationResult::Value(-win,nodes,mvs))
+                                        Ok(EvaluationResult::Value(-win,nodes))
                                     }
                                 }
                             }
@@ -928,33 +934,23 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
         } else {
             let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
-                BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes,mut mvs)) => {
+                BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes),_) => {
                     node.win = win;
                     node.nodes = nodes;
 
-                    gs.m.map(|m| mvs.push_front(m));
-
-                    return Ok(EvaluationResult::Value(win,nodes,mvs));
+                    return Ok(EvaluationResult::Value(win,nodes));
                 },
-                BeforeSearchResult::Complete(r) => {
-                    return Ok(r);
+                BeforeSearchResult::Timeout | BeforeSearchResult::Complete(EvaluationResult::Timeout,_) => {
+                    return Ok(EvaluationResult::Timeout);
                 },
                 BeforeSearchResult::Terminate(None) => {
-                    let mut mvs = VecDeque::new();
-
-                    gs.m.map(|m| mvs.push_front(m));
-
-                    return Ok(EvaluationResult::Value(Score::Value(0.), 0, mvs));
+                    return Ok(EvaluationResult::Value(Score::Value(0.), 0));
                 },
                 BeforeSearchResult::Terminate(Some(win)) => {
                     node.win = win;
                     node.nodes = 1;
 
-                    let mut mvs = VecDeque::new();
-
-                    gs.m.map(|m| mvs.push_front(m));
-
-                    return Ok(EvaluationResult::Value(win, 1, mvs));
+                    return Ok(EvaluationResult::Value(win, 1));
                 },
                 BeforeSearchResult::AsyncMvs(mvs) => {
                     mvs
@@ -986,7 +982,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                 gs.m.map(|m| mvs.push_front(m));
 
-                Ok(EvaluationResult::Value(score,1,mvs))
+                Ok(EvaluationResult::Value(score,1))
             } else {
                 Err(ApplicationError::LogicError(String::from(
                     "Evaluated board information not found"
