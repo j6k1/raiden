@@ -751,7 +751,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             }
         }
 
-        if is_timeout {
+        if is_timeout && best_moves.is_empty() {
             Ok(EvaluationResult::Timeout)
         } else {
             Ok(EvaluationResult::Value(best_score, node.nodes, best_moves))
