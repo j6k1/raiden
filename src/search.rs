@@ -624,7 +624,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             node.mate_nodes += 1;
 
                             if node.mate_nodes == mvs_count {
-                                win
+                                Score::INFINITE
                             } else {
                                 Score::Value(1.)
                             }
@@ -909,7 +909,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                             node.mate_nodes += 1;
 
                                             if node.mate_nodes == mvs_count {
-                                                win
+                                                Score::INFINITE
                                             } else {
                                                 Score::Value(1.)
                                             }
