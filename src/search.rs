@@ -96,7 +96,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         }
         commands.push(UsiInfoSubCommand::Time((Instant::now() - env.think_start_time).as_millis() as u64));
 
-        Ok(env.info_sender.send_immediate(commands)?)
+        Ok(env.info_sender.send(commands)?)
     }
 
     fn startup_strategy<'a>(&self,gs: &mut GameState<'a>,
