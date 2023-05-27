@@ -593,13 +593,13 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let mut completed = false;
 
         loop {
-            if (completed || is_timeout) && evalutor.active_threads() == 0 {
-                break;
-            }
-
             let is_mate = node.childlren.peek().map(|n| {
                 n.nodes > 0 && n.computed_score() == Score::INFINITE
             }).unwrap_or(true);
+
+            if (completed || is_timeout || is_mate) && evalutor.active_threads() == 0 {
+                break;
+            }
 
             if threads == 0 || completed || is_timeout || is_mate {
                 let r = self.receiver.recv();
