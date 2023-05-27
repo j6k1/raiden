@@ -408,7 +408,7 @@ impl GameNode {
     }
 
     pub fn computed_score(&self) -> Score {
-        if self.nodes == 0 {
+        if !self.expanded {
             Score::NEGINFINITE
         } else {
             match self.win {
@@ -426,7 +426,7 @@ impl GameNode {
         let mut mvs = VecDeque::new();
 
         while let Some(mut n) = self.childlren.pop() {
-            if n.nodes > 0 {
+            if n.expanded {
                 mvs = n.best_moves();
                 nodes.push_front(n);
                 break;
@@ -449,7 +449,7 @@ impl GameNode {
         let mut score = Score::NEGINFINITE;
 
         while let Some(n) = self.childlren.pop() {
-            if n.nodes > 0 {
+            if n.expanded {
                 score = -n.computed_score();
                 nodes.push_front(n);
                 break;
@@ -476,7 +476,7 @@ impl PartialOrd for GameNode {
         let r = other.computed_score();
 
         if l == Score::NEGINFINITE && r == Score::NEGINFINITE {
-           Some(self.nodes.cmp(&other.nodes)
+           Some(self.expanded.cmp(&other.expanded)
                           .then(self.asc_priority.cmp(&other.asc_priority))
                           .reverse().then((self as *const GameNode).cmp(&(other as *const GameNode))))
         } else {
