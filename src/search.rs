@@ -206,11 +206,11 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             let mhash = env.hasher.calc_main_hash(gs.mhash,gs.teban,gs.state.get_banmen(),gs.mc,m.to_applied_move(),&o);
             let shash = env.hasher.calc_sub_hash(gs.shash,gs.teban,gs.state.get_banmen(),gs.mc,m.to_applied_move(),&o);
 
-            if defense {
-                node.childlren.push(Box::new(GameNode::new(Some(m), mhash, shash, defense_priority(gs.teban,&gs.state,m))));
+            let mut n = if defense {
+                Box::new(GameNode::new(Some(m), mhash, shash, defense_priority(gs.teban,&gs.state,m)))
             } else {
-                node.childlren.push(Box::new(GameNode::new(Some(m), mhash, shash, attack_priority(gs.teban,&gs.state,m))));
-            }
+                Box::new(GameNode::new(Some(m), mhash, shash, attack_priority(gs.teban,&gs.state,m)))
+            };
 
             if !env.kyokumen_map.contains_key(&(gs.teban.opposite(),mhash,shash)) {
                 let (s,r) = mpsc::channel();
@@ -220,7 +220,16 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 
                 env.kyokumen_map.insert_new((gs.teban.opposite(),mhash,shash),(Score::Value(0.),Arc::new(state),Arc::new(mc)));
 
-                await_mvs.push(r);
+                await_mvs.push((r,n));
+            } else {
+                n.nodes = 1;
+                env.kyokumen_map.get(&(gs.teban.opposite(),mhash,shash)).map(|g| {
+                    let (s,_,_) = *g;
+
+                    n.win = s;
+                });
+
+                node.childlren.push(n);
             }
         }
         Ok(BeforeSearchResult::AsyncMvs(await_mvs))
@@ -246,7 +255,7 @@ pub enum BeforeSearchResult {
     Complete(EvaluationResult,VecDeque<LegalMove>),
     Timeout,
     Terminate(Option<Score>),
-    AsyncMvs(Vec<Receiver<(u64,u64,f32)>>),
+    AsyncMvs(Vec<(Receiver<(u64,u64,f32)>,Box<GameNode>)>),
 }
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub enum Score {
@@ -375,6 +384,7 @@ pub struct GameState<'a> {
 pub struct GameNode {
     win:Score,
     nodes:u64,
+    expanded:bool,
     asc_priority:i32,
     mate_nodes:usize,
     m:Option<LegalMove>,
@@ -387,6 +397,7 @@ impl GameNode {
         GameNode {
             win:Score::Value(0.),
             nodes:0,
+            expanded:false,
             asc_priority:asc_priority,
             mate_nodes:0,
             m:m,
@@ -571,13 +582,20 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         }
 
         for r in await_mvs {
-            let (mhash,shash,s) = r.recv()?;
+            let (mhash,shash,s) = r.0.recv()?;
             env.nodes.fetch_add(1,atomic::Ordering::Release);
 
             if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban.opposite(),mhash,shash)) {
                 let (ref mut score,_,_) = *g;
 
                 *score = Score::Value(s);
+
+                let mut n = r.1;
+
+                n.nodes = 1;
+                n.win = *score;
+
+                node.childlren.push(n);
             }
         }
 
@@ -854,7 +872,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                      evalutor: &Evalutor) -> Result<Self::Output,ApplicationError> {
         let mut gs = gs;
 
-        if node.nodes > 0 {
+        if node.expanded {
             let mvs_count = node.childlren.len();
 
             if let Some(mut game_node) = node.childlren.peek_mut() {
@@ -976,28 +994,26 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
 
             for r in await_mvs {
-                let (mhash, shash, s) = r.recv()?;
+                let (mhash, shash, s) = r.0.recv()?;
                 env.nodes.fetch_add(1, atomic::Ordering::Release);
 
                 if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban.opposite(), mhash, shash)) {
                     let (ref mut score, _, _) = *g;
 
                     *score = Score::Value(s);
+
+                    let mut n = r.1;
+
+                    n.nodes = 1;
+                    n.win = *score;
+
+                    node.childlren.push(n);
                 }
             }
 
-            if let Some(g) = env.kyokumen_map.get(&(gs.teban, node.mhash, node.shash)) {
-                let (score, _, _) = *g;
+            node.expanded = true;
 
-                node.nodes = 1;
-                node.win = score;
-
-                Ok(EvaluationResult::Value(score,1))
-            } else {
-                Err(ApplicationError::LogicError(String::from(
-                    "Evaluated board information not found"
-                )))
-            }
+            Ok(EvaluationResult::Value(node.win,1))
         }
     }
 }
