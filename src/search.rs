@@ -595,7 +595,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         loop {
             let is_mate = node.childlren.peek().map(|n| {
                 n.nodes > 0 && n.computed_score() == Score::INFINITE
-            }).unwrap_or(true);
+            }).unwrap_or(false);
 
             if (completed || is_timeout || is_mate) && evalutor.active_threads() == 0 {
                 break;
@@ -799,17 +799,35 @@ impl<L,S> Search<L,S> for Root<L,S> where L: Logger + Send + 'static, S: InfoSen
 
         env.stop.store(true,atomic::Ordering::Release);
 
+        let mut last_err = None;
+
         match r {
             Ok(r) => {
                 while evalutor.active_threads() > 0 {
-                    self.receiver.recv()?.map_err(|e| ApplicationError::from(e))?;
-                    evalutor.on_end_thread()?;
+                    if let Err(e) = self.receiver.recv()?.map_err(|e| ApplicationError::from(e)).and_then(|_| {
+                        evalutor.on_end_thread()
+                    }) {
+                        last_err = Some(e);
+                    }
                 }
 
-                Ok(r)
+                match last_err {
+                    None => Ok(r),
+                    Some(e) => Err(e)
+                }
             },
             Err(e) => {
-                Err(e)
+                let mut last_err = Err(e);
+
+                while evalutor.active_threads() > 0 {
+                    if let Err(e) = self.receiver.recv()?.map_err(|e| ApplicationError::from(e)).and_then(|_| {
+                        evalutor.on_end_thread()
+                    }) {
+                        last_err = Err(e);
+                    }
+                }
+
+                last_err
             }
         }
     }
