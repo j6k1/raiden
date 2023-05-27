@@ -558,6 +558,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         let await_mvs = match self.before_search(env,&mut gs,node,evalutor)? {
             BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes),mvs) => {
                 node.win = win;
+                node.expanded = true;
                 node.nodes = nodes;
 
                 return Ok(RootEvaluationResult::Value(win,nodes,mvs));
@@ -568,6 +569,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             },
             BeforeSearchResult::Terminate(Some(win)) => {
                 node.win = win;
+                node.expanded = true;
                 node.nodes = 1;
 
                 return Ok(RootEvaluationResult::Value(win,1,VecDeque::new()));
@@ -612,7 +614,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
         loop {
             let is_mate = node.childlren.peek().map(|n| {
-                n.nodes > 0 && n.computed_score() == Score::INFINITE
+                n.expanded && n.computed_score() == Score::INFINITE
             }).unwrap_or(false);
 
             if (completed || is_timeout || is_mate) && evalutor.active_threads() == 0 {
@@ -630,7 +632,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                 match r {
                     RecvEvaluationResult::Value(mut n, win, nodes) => {
-                        if n.nodes > 0 && best_score <= -n.computed_score() {
+                        if n.expanded && best_score <= -n.computed_score() {
                             best_score = -n.computed_score();
 
                             let pv = n.best_moves();
@@ -638,7 +640,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             self.send_info(env, &pv, -n.computed_score())?;
                         }
 
-                        let win = if n.nodes > 0 && n.computed_score() == Score::INFINITE {
+                        let win = if n.expanded && n.computed_score() == Score::INFINITE {
                             node.mate_nodes += 1;
 
                             if node.mate_nodes == mvs_count {
@@ -653,7 +655,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         node.win = node.win + -win;
                         node.nodes += nodes;
 
-                        if n.nodes > 0 && (win == Score::INFINITE || n.computed_score() == Score::NEGINFINITE) {
+                        if n.expanded && (win == Score::INFINITE || n.computed_score() == Score::NEGINFINITE) {
                             node.childlren.push(n);
                             completed = true;
                             env.stop.store(true,atomic::Ordering::Release);
@@ -702,7 +704,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                           oute_kyokumen_map,
                           current_kyokumen_map,
                           sennichite_count) => {
-                        if sennichite_count >= 3 && game_node.nodes == 0 {
+                        if sennichite_count >= 3 && !game_node.expanded {
+                            game_node.expanded = true;
                             game_node.nodes = 1;
                             game_node.win = Score::INFINITE;
 
@@ -891,7 +894,8 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                              oute_kyokumen_map,
                              current_kyokumen_map,
                              sennichite_count) => {
-                        if sennichite_count >= 3 && game_node.nodes == 0 {
+                        if sennichite_count >= 3 && !game_node.expanded {
+                            game_node.expanded = true;
                             game_node.nodes = 1;
                             game_node.win = Score::INFINITE;
 
@@ -937,7 +941,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                                         return Ok(EvaluationResult::Value(Score::Value(0.),0));
                                     },
                                     EvaluationResult::Value(win, nodes) => {
-                                        let win = if game_node.nodes > 0 && game_node.computed_score() == Score::INFINITE {
+                                        let win = if game_node.expanded && game_node.computed_score() == Score::INFINITE {
                                             node.mate_nodes += 1;
 
                                             if node.mate_nodes == mvs_count {
@@ -968,6 +972,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             let await_mvs = match self.before_search(env, &mut gs, node, evalutor)? {
                 BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes),_) => {
                     node.win = win;
+                    node.expanded = true;
                     node.nodes = nodes;
 
                     return Ok(EvaluationResult::Value(win,nodes));
@@ -976,10 +981,12 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                     return Ok(EvaluationResult::Timeout);
                 },
                 BeforeSearchResult::Terminate(None) => {
+                    node.expanded = true;
                     return Ok(EvaluationResult::Value(Score::Value(0.), 0));
                 },
                 BeforeSearchResult::Terminate(Some(win)) => {
                     node.win = win;
+                    node.expanded = true;
                     node.nodes = 1;
 
                     return Ok(EvaluationResult::Value(win, 1));
