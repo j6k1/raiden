@@ -212,13 +212,13 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
                 node.childlren.push(Box::new(GameNode::new(Some(m), mhash, shash, attack_priority(gs.teban,&gs.state,m))));
             }
 
-            if !env.kyokumen_map.contains_key(&(gs.teban,mhash,shash)) {
+            if !env.kyokumen_map.contains_key(&(gs.teban.opposite(),mhash,shash)) {
                 let (s,r) = mpsc::channel();
                 let (state,mc,_) = Rule::apply_move_none_check(&gs.state, gs.teban, gs.mc, m.to_applied_move());
 
                 evalutor.submit(gs.teban.opposite(),state.get_banmen(),&mc,mhash,shash,s)?;
 
-                env.kyokumen_map.insert_new((gs.teban,mhash,shash),(Score::Value(0.),Arc::new(state),Arc::new(mc)));
+                env.kyokumen_map.insert_new((gs.teban.opposite(),mhash,shash),(Score::Value(0.),Arc::new(state),Arc::new(mc)));
 
                 await_mvs.push(r);
             }
@@ -574,7 +574,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
             let (mhash,shash,s) = r.recv()?;
             env.nodes.fetch_add(1,atomic::Ordering::Release);
 
-            if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban,mhash,shash)) {
+            if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban.opposite(),mhash,shash)) {
                 let (ref mut score,_,_) = *g;
 
                 *score = Score::Value(s);
@@ -705,7 +705,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                             continue;
                         }
 
-                        let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
+                        let next = env.kyokumen_map.get(&(gs.teban.opposite(),game_node.mhash,game_node.shash))
                                                                                   .map(|g| {
                             let (_,ref state,ref mc) = *g;
                             (Arc::clone(state),Arc::clone(mc))
@@ -891,7 +891,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                             return Ok(EvaluationResult::Value(win,1));
                         }
 
-                        let next = env.kyokumen_map.get(&(gs.teban,game_node.mhash,game_node.shash))
+                        let next = env.kyokumen_map.get(&(gs.teban.opposite(),game_node.mhash,game_node.shash))
                             .map(|g| {
                                 let (_,ref state, ref mc) = *g;
                                 (Arc::clone(state),Arc::clone(mc))
@@ -979,14 +979,14 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                 let (mhash, shash, s) = r.recv()?;
                 env.nodes.fetch_add(1, atomic::Ordering::Release);
 
-                if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban, mhash, shash)) {
+                if let Some(mut g) = env.kyokumen_map.get_mut(&(gs.teban.opposite(), mhash, shash)) {
                     let (ref mut score, _, _) = *g;
 
                     *score = Score::Value(s);
                 }
             }
 
-            if let Some(g) = env.kyokumen_map.get(&(gs.teban.opposite(), node.mhash, node.shash)) {
+            if let Some(g) = env.kyokumen_map.get(&(gs.teban, node.mhash, node.shash)) {
                 let (score, _, _) = *g;
 
                 node.nodes = 1;
