@@ -145,8 +145,6 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
                          evalutor: &Evalutor)
         -> Result<BeforeSearchResult, ApplicationError> {
 
-        self.send_depth(env,gs.current_depth)?;
-
         if self.end_of_search(env) {
             return Ok(BeforeSearchResult::Terminate(None));
         } else if self.timelimit_reached(env) || self.timeout_expected(env) || env.stop.load(atomic::Ordering::Acquire) {
@@ -975,19 +973,28 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                     node.expanded = true;
                     node.nodes = nodes;
 
+                    self.send_depth(env,gs.current_depth)?;
+
                     return Ok(EvaluationResult::Value(win,nodes));
                 },
                 BeforeSearchResult::Timeout | BeforeSearchResult::Complete(EvaluationResult::Timeout,_) => {
+                    self.send_depth(env,gs.current_depth)?;
+
                     return Ok(EvaluationResult::Timeout);
                 },
                 BeforeSearchResult::Terminate(None) => {
                     node.expanded = true;
+
+                    self.send_depth(env,gs.current_depth)?;
+
                     return Ok(EvaluationResult::Value(Score::Value(0.), 0));
                 },
                 BeforeSearchResult::Terminate(Some(win)) => {
                     node.win = win;
                     node.expanded = true;
                     node.nodes = 1;
+
+                    self.send_depth(env,gs.current_depth)?;
 
                     return Ok(EvaluationResult::Value(win, 1));
                 },
@@ -1019,6 +1026,8 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
 
             node.expanded = true;
+
+            self.send_depth(env,gs.current_depth)?;
 
             Ok(EvaluationResult::Value(node.win,1))
         }
