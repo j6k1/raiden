@@ -73,8 +73,9 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         Ok(env.info_sender.send(commands)?)
     }
 
-    fn send_info(&self, env:&mut Environment<L,S>, depth: u32, pv:&VecDeque<LegalMove>, score:Score) -> Result<(),ApplicationError>
+    fn send_info(&self, env:&mut Environment<L,S>, pv:&VecDeque<LegalMove>, score:Score) -> Result<(),ApplicationError>
         where Arc<Mutex<OnErrorHandler<L>>>: Send + 'static {
+        let depth = pv.len() as u32;
 
         let mut commands: Vec<UsiInfoSubCommand> = Vec::new();
 
@@ -639,7 +640,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                             let pv = n.best_moves();
 
-                            self.send_info(env, gs.current_depth, &pv, -n.computed_score())?;
+                            self.send_info(env, &pv, -n.computed_score())?;
                         }
 
                         let win = if n.expanded && n.computed_score() == Score::INFINITE {
@@ -804,7 +805,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         if is_timeout && best_moves.is_empty() {
             Ok(RootEvaluationResult::Timeout)
         } else {
-            self.send_info(env, gs.current_depth, &best_moves,best_score)?;
+            self.send_info(env, &best_moves,best_score)?;
 
             Ok(RootEvaluationResult::Value(best_score, node.nodes, best_moves))
         }
