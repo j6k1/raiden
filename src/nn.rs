@@ -21,6 +21,7 @@ use nncombinator::layer::input::InputLayer;
 use nncombinator::layer::output::LinearOutputLayer;
 use nncombinator::layer::linear::{LinearLayerBuilder};
 use nncombinator::layer::activation::ActivationLayer;
+use nncombinator::layer::batchnormalization::BatchNormalizationLayerBuilder;
 use nncombinator::lossfunction::{Mse};
 use nncombinator::ope::UnitValue;
 use nncombinator::optimizer::{SGD};
@@ -178,16 +179,22 @@ impl Evalutor {
                     let mut nna = net.try_add_layer(|l| {
                         let rnd = rnd.clone();
                         LinearLayerBuilder::<2517,256>::new().build(l, &device, move || n1.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+                    })?.try_add_layer(|l| {
+                        BatchNormalizationLayerBuilder::new().build(l,&device)
                     })?.add_layer(|l| {
                         ActivationLayer::new(l, ReLu::new(&device), &device)
                     }).try_add_layer(|l| {
                         let rnd = rnd.clone();
                         LinearLayerBuilder::<256,32>::new().build(l, &device, move || n2.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+                    })?.try_add_layer(|l| {
+                        BatchNormalizationLayerBuilder::new().build(l,&device)
                     })?.add_layer(|l| {
                         ActivationLayer::new(l, ReLu::new(&device), &device)
                     }).try_add_layer(|l| {
                         let rnd = rnd.clone();
                         LinearLayerBuilder::<32,1>::new().build(l, &device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+                    })?.try_add_layer(|l| {
+                        BatchNormalizationLayerBuilder::new().build(l,&device)
                     })?.add_layer(|l| {
                         ActivationLayer::new(l, Tanh::new(&device), &device)
                     }).add_layer_train(|l| {
@@ -210,16 +217,22 @@ impl Evalutor {
                     let mut nnb = net.try_add_layer(|l| {
                         let rnd = rnd.clone();
                         LinearLayerBuilder::<2517,256>::new().build(l, &device, move || n1.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+                    })?.try_add_layer(|l| {
+                        BatchNormalizationLayerBuilder::new().build(l,&device)
                     })?.add_layer(|l| {
                         ActivationLayer::new(l, ReLu::new(&device), &device)
                     }).try_add_layer(|l| {
                         let rnd = rnd.clone();
                         LinearLayerBuilder::<256,32>::new().build(l, &device, move || n2.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+                    })?.try_add_layer(|l| {
+                        BatchNormalizationLayerBuilder::new().build(l,&device)
                     })?.add_layer(|l| {
                         ActivationLayer::new(l, ReLu::new(&device), &device)
                     }).try_add_layer(|l| {
                         let rnd = rnd.clone();
                         LinearLayerBuilder::<32,1>::new().build(l, &device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+                    })?.try_add_layer(|l| {
+                        BatchNormalizationLayerBuilder::new().build(l,&device)
                     })?.add_layer(|l| {
                         ActivationLayer::new(l, Tanh::new(&device), &device)
                     }).add_layer_train(|l| {
@@ -371,7 +384,7 @@ impl Evalutor {
                         .zip(h.into_par_iter().zip(s.into_par_iter()))
                         .for_each(|(r,((mhash,shash),s))| {
 
-                        let _ = s.send((mhash, shash, r.0 + r.1));
+                        let _ = s.send((mhash, shash, r.0 * 0.5 + r.1 * 0.5));
                     });
                 },
                 Err(e) => {
@@ -450,16 +463,22 @@ impl TrainerCreator {
         let mut nna = net.try_add_layer(|l| {
             let rnd = rnd.clone();
             LinearLayerBuilder::<2517,256>::new().build(l,&device, move || n1.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+        })?.try_add_layer(|l| {
+            BatchNormalizationLayerBuilder::new().build(l,&device)
         })?.add_layer(|l| {
             ActivationLayer::new(l,ReLu::new(&device),&device)
         }).try_add_layer(|l| {
             let rnd = rnd.clone();
             LinearLayerBuilder::<256,32>::new().build(l,&device, move || n2.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+        })?.try_add_layer(|l| {
+            BatchNormalizationLayerBuilder::new().build(l,&device)
         })?.add_layer(|l| {
             ActivationLayer::new(l,ReLu::new(&device),&device)
         }).try_add_layer(|l| {
             let rnd = rnd.clone();
             LinearLayerBuilder::<32,1>::new().build(l,&device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+        })?.try_add_layer(|l| {
+            BatchNormalizationLayerBuilder::new().build(l,&device)
         })?.add_layer(|l| {
             ActivationLayer::new(l,Tanh::new(&device),&device)
         }).add_layer_train(|l| {
@@ -482,16 +501,22 @@ impl TrainerCreator {
         let mut nnb = net.try_add_layer(|l| {
             let rnd = rnd.clone();
             LinearLayerBuilder::<2517,256>::new().build(l,&device, move || n1.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+        })?.try_add_layer(|l| {
+            BatchNormalizationLayerBuilder::new().build(l,&device)
         })?.add_layer(|l| {
             ActivationLayer::new(l,ReLu::new(&device),&device)
         }).try_add_layer(|l| {
             let rnd = rnd.clone();
             LinearLayerBuilder::<256,32>::new().build(l,&device, move || n2.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+        })?.try_add_layer(|l| {
+            BatchNormalizationLayerBuilder::new().build(l,&device)
         })?.add_layer(|l| {
             ActivationLayer::new(l,ReLu::new(&device),&device)
         }).try_add_layer(|l| {
             let rnd = rnd.clone();
             LinearLayerBuilder::<32,1>::new().build(l,&device, move || n3.sample(&mut rnd.borrow_mut().deref_mut()), || 0.)
+        })?.try_add_layer(|l| {
+            BatchNormalizationLayerBuilder::new().build(l,&device)
         })?.add_layer(|l| {
             ActivationLayer::new(l,Tanh::new(&device),&device)
         }).add_layer_train(|l| {
@@ -525,7 +550,7 @@ impl TrainerCreator {
         Ok(Trainer {
             nna:nna,
             nnb:nnb,
-            optimizer:SGD::new(0.001),
+            optimizer:SGD::new(0.005),
             nna_path: nna_path,
             nnb_path: nnb_path,
             nnsavedir: save_dir,
@@ -631,7 +656,7 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
         let ra = self.nna.forward_all(input.clone() * SCALE)?;
         let rb = self.nnb.forward_all(input * SCALE)?;
 
-        Ok(ra[0] + rb[0])
+        Ok(ra[0] * 0.5 + rb[0] * 0.5)
     }
 
     pub fn learning_by_packed_sfens<'a>(&mut self,
@@ -702,7 +727,7 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
         let ra = self.nna.forward_all(input.clone() * SCALE)?;
         let rb = self.nnb.forward_all(input * SCALE)?;
 
-        Ok((game_result,ra[0] + rb[0]))
+        Ok((game_result,ra[0] * 0.5+ rb[0] * 0.5))
     }
 
     pub fn learning_by_hcpe<'a>(&mut self,
@@ -799,7 +824,7 @@ impl<M> Trainer<M> where M: BatchNeuralNetwork<f32,DeviceGpu<f32>,BinFilePersist
             _ => GameEndState::Draw
         };
 
-        Ok((s,ra[0] + rb[0]))
+        Ok((s,ra[0] * 0.5 + rb[0] * 0.5))
     }
 
     pub fn save(&mut self) -> Result<(),ApplicationError> {
