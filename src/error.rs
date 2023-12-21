@@ -3,7 +3,7 @@ use std::cell::{BorrowError, BorrowMutError};
 use std::collections::VecDeque;
 use std::num::{ParseFloatError, ParseIntError};
 use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError, Sender, SendError};
-use std::sync::{MutexGuard, PoisonError};
+use std::sync::{MutexGuard, PoisonError, RwLockReadGuard, RwLockWriteGuard};
 use concurrent_queue::{PopError, PushError};
 use csaparser::error::CsaParserError;
 use nncombinator::error::{ConfigReadError, CudaError, DeviceError, EvaluateError, LayerInstantiationError, PersistenceError, TrainingError};
@@ -12,6 +12,7 @@ use usiagent::error::{EventDispatchError, InfoSendError, PlayerError, SfenString
 use usiagent::event::{EventQueue, SystemEvent, SystemEventKind, UserEvent, UserEventKind};
 use usiagent::rule::AppliedMove;
 use crate::nn::{BatchItem, Message};
+use crate::search::GameNode;
 
 #[derive(Debug)]
 pub enum ApplicationError {
@@ -288,6 +289,16 @@ impl From<SendError<()>> for ApplicationError {
 }
 impl From<PoisonError<MutexGuard<'_, VecDeque<std::sync::mpsc::Sender<()>>>>> for ApplicationError {
     fn from(err: PoisonError<MutexGuard<'_, VecDeque<std::sync::mpsc::Sender<()>>>>) -> ApplicationError {
+        ApplicationError::PoisonError(format!("{}",err))
+    }
+}
+impl From<PoisonError<RwLockWriteGuard<'_, GameNode>>> for ApplicationError {
+    fn from(err: PoisonError<RwLockWriteGuard<'_, GameNode>>) -> ApplicationError {
+        ApplicationError::PoisonError(format!("{}",err))
+    }
+}
+impl From<PoisonError<RwLockReadGuard<'_, GameNode>>> for ApplicationError {
+    fn from(err: PoisonError<RwLockReadGuard<'_, GameNode>>) -> ApplicationError {
         ApplicationError::PoisonError(format!("{}",err))
     }
 }

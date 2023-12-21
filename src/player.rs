@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::sync::atomic::{Ordering};
 use std::time::{Duration, Instant};
 use usiagent::command::{BestMove, CheckMate, UsiInfoSubCommand, UsiOptType};
@@ -348,7 +348,10 @@ impl USIPlayer<ApplicationError> for Raiden {
 
                 let strategy  = Root::new();
 
-                let result = strategy.search(&mut env,&mut gs, &mut GameNode::new(None,mhash,shash,0), &mut event_dispatcher, evalutor);
+                let result = strategy.search(&mut env,&mut gs,
+                                                                         &Arc::downgrade(
+                                                                             &Arc::new(RwLock::new(GameNode::new(Weak::new(),None,mhash,shash,0))
+                                                                             )), &mut event_dispatcher, evalutor);
 
                 let bestmove = match result {
                     Err(ref e) => {

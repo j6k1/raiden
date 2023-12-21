@@ -3,7 +3,7 @@ use std::ops::DerefMut;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, atomic, mpsc, Mutex};
+use std::sync::{Arc, atomic, mpsc, Mutex, RwLock};
 use std::{fs, thread};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use concurrent_queue::ConcurrentQueue;
@@ -35,6 +35,7 @@ use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIter
 use usiagent::event::{EventQueue, GameEndState, UserEvent, UserEventKind};
 use usiagent::shogi::{Banmen, KomaKind, Mochigoma, MOCHIGOMA_KINDS, MochigomaCollections, Teban};
 use crate::error::{ApplicationError, EvaluationThreadError};
+use crate::search::{GameNode, Score};
 
 const BANMEN_SIZE:usize = 81;
 
@@ -107,10 +108,8 @@ const OPPONENT_INDEX_MAP:[usize; 7] = [
 const SCALE:f32 = 1.;
 #[derive(Debug)]
 pub struct BatchItem {
-    mhash:u64,
-    shash:u64,
     input:Arr<f32,2517>,
-    sender:Sender<(u64,u64,f32)>
+    node:Arc<RwLock<GameNode>>
 }
 #[derive(Debug)]
 pub enum Message {
@@ -301,15 +300,13 @@ impl Evalutor {
         })
     }
 
-    pub fn submit(&self, t:Teban, b:&Banmen, mc:&MochigomaCollections,mhash:u64,shash:u64,sender:Sender<(u64,u64,f32)>)
+    pub fn submit(&self, t:Teban, b:&Banmen, mc:&MochigomaCollections,node:Arc<RwLock<GameNode>>)
         -> Result<(),ApplicationError> {
         let input = InputCreator::make_input(true,t,b,mc);
 
         Ok(self.queue.push(BatchItem {
-            mhash:mhash,
-            shash:shash,
             input:input,
-            sender:sender
+            node:node
         })?)
     }
 
@@ -345,7 +342,19 @@ impl Evalutor {
         Ok(r.recv()?)
     }
 
+    pub fn begin_async_transaction(&self) -> Result<(),ApplicationError> {
+        self.wait_threads.fetch_add(1,Ordering::Release);
+
+        if self.wait_threads.load(Ordering::Acquire) >= self.active_threads.load(Ordering::Acquire) {
+            self.start_evaluation()?;
+        }
+
+        Ok(())
+    }
+
     fn start_evaluation(&self) -> Result<(),ApplicationError> {
+        let wait_threads = self.wait_threads.load(Ordering::Acquire);
+
         if self.wait_threads.swap(0,Ordering::Release) >= self.active_threads.load(Ordering::Acquire) {
             let mut queue = Vec::with_capacity(self.queue.len());
 
@@ -363,29 +372,33 @@ impl Evalutor {
                 return Ok(());
             }
 
-            let (h,input, s) = queue.into_par_iter().fold(|| (vec![], vec![], vec![]), |mut acc, item| {
-                acc.0.push((item.mhash,item.shash));
-                acc.1.push(item.input);
-                acc.2.push(item.sender);
-
-                acc
-            }).reduce(|| (vec![],vec![],vec![]), |mut acc, (h,input,sender)| {
-                acc.0.extend_from_slice(&h);
-                acc.1.extend_from_slice(&input);
-                acc.2.extend_from_slice(&sender);
-                acc
-            });
-
-            self.sender.send(Message::Eval(input))?;
+            self.sender.send(Message::Eval(queue.iter().map(|item| item.input.clone()).collect()))?;
 
             match self.receiver.lock() {
                 Ok(receiver) => {
                     receiver.recv().map_err(|e| EvaluationThreadError::from(e))??.into_par_iter()
-                        .zip(h.into_par_iter().zip(s.into_par_iter()))
-                        .for_each(|(r,((mhash,shash),s))| {
+                        .zip(queue.into_par_iter())
+                        .map(|(r,item)| {
+                            let s = r.0 * 0.5 + r.1 * 0.5;
+                            let mut s = Score::Value(s);
 
-                        let _ = s.send((mhash, shash, r.0 * 0.5 + r.1 * 0.5));
-                    });
+                            item.node.write().map(| mut n | {
+                                n.nodes = 1;
+                                n.win = s;
+                            })?;
+
+                            let n = item.node;
+
+                            while let Some(n) = n.write().map(|n| (&*n).parent.upgrade())? {
+                                n.write().map(| mut n | {
+                                    n.nodes += 1;
+                                    s = -s;
+                                    n.win = s;
+                                })?;
+                            }
+
+                            Ok(())
+                        }).collect::<Result<Vec<()>,ApplicationError>>()?;
                 },
                 Err(e) => {
                     return Err(ApplicationError::from(e));
@@ -397,6 +410,8 @@ impl Evalutor {
 
                 s.send(())?;
             }
+        } else {
+            self.wait_threads.fetch_add(wait_threads,Ordering::Release);
         }
 
         Ok(())
