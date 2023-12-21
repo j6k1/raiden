@@ -314,16 +314,18 @@ impl Evalutor {
         self.active_threads.load(atomic::Ordering::Acquire)
     }
 
-    pub fn on_begin_thread(&self) {
+    pub fn on_begin_thread(&self) -> Result<(),ApplicationError> {
+        self.try_start_evaluation()?;
+
         self.active_threads.fetch_add(1,Ordering::Release);
+
+        Ok(())
     }
 
     pub fn on_end_thread(&self) -> Result<(),ApplicationError> {
         self.active_threads.fetch_sub(1,Ordering::Release);
 
-        if self.wait_threads.load(Ordering::Acquire) >= self.active_threads.load(Ordering::Acquire) {
-            self.start_evaluation()?;
-        }
+        self.try_start_evaluation()?;
 
         Ok(())
     }
@@ -335,27 +337,27 @@ impl Evalutor {
 
         self.wait_threads.fetch_add(1,Ordering::Release);
 
-        if self.wait_threads.load(Ordering::Acquire) >= self.active_threads.load(Ordering::Acquire) {
-            self.start_evaluation()?;
-        }
+        self.try_start_evaluation()?;
 
         Ok(r.recv()?)
     }
 
     pub fn begin_async_transaction(&self) -> Result<(),ApplicationError> {
-        self.wait_threads.fetch_add(1,Ordering::Release);
-
-        if self.wait_threads.load(Ordering::Acquire) >= self.active_threads.load(Ordering::Acquire) {
-            self.start_evaluation()?;
+        if self.wait_threads.load(Ordering::Acquire) < self.active_threads.load(Ordering::Acquire) {
+            self.wait_threads.fetch_add(1,Ordering::Release);
         }
+
+        self.try_start_evaluation()?;
 
         Ok(())
     }
 
-    fn start_evaluation(&self) -> Result<(),ApplicationError> {
-        let wait_threads = self.wait_threads.load(Ordering::Acquire);
-
-        if self.wait_threads.swap(0,Ordering::Release) >= self.active_threads.load(Ordering::Acquire) {
+    fn try_start_evaluation(&self) -> Result<(),ApplicationError> {
+        if self.wait_threads.compare_exchange(
+            self.active_threads.load(Ordering::Acquire),0,
+            Ordering::Release,
+            Ordering::Acquire
+        ).is_ok() {
             let mut queue = Vec::with_capacity(self.queue.len());
 
             while !self.queue.is_empty() {
@@ -410,8 +412,6 @@ impl Evalutor {
 
                 s.send(())?;
             }
-        } else {
-            self.wait_threads.fetch_add(wait_threads,Ordering::Release);
         }
 
         Ok(())

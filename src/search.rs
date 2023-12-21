@@ -55,7 +55,8 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
         let mut commands:Vec<UsiInfoSubCommand> = Vec::new();
         commands.push(UsiInfoSubCommand::Str(String::from(message)));
 
-        Ok(env.info_sender.send(commands)?)
+        env.info_sender.send(commands)?;
+        Ok(env.info_sender.flush()?)
     }
 
     fn send_message_immediate(&self, env:&mut Environment<L,S>, message:&str) -> Result<(),ApplicationError>
@@ -173,14 +174,14 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 
             mvs.push_front(m);
 
-            return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::INFINITE,1),mvs));
+            return Ok(BeforeSearchResult::Complete(mvs,Score::INFINITE, 1));
         }
 
         let (mvs,defense) = if Rule::is_mate(gs.teban.opposite(),&*gs.state) {
             let mvs = Rule::respond_oute_only_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
-                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1),VecDeque::new()));
+                return Ok(BeforeSearchResult::Complete(VecDeque::new(),Score::NEGINFINITE, 1));
             } else {
                 (mvs,true)
             }
@@ -188,7 +189,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             let mvs:Vec<LegalMove> = Rule::legal_moves_all(gs.teban, &*gs.state, &*gs.mc);
 
             if mvs.len() == 0 {
-                return Ok(BeforeSearchResult::Complete(EvaluationResult::Value(Score::NEGINFINITE,1),VecDeque::new()));
+                return Ok(BeforeSearchResult::Complete(VecDeque::new(),Score::NEGINFINITE,1));
             } else {
                 (mvs,false)
             }
@@ -222,26 +223,16 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
             };
 
             if !env.kyokumen_map.contains_key(&(gs.teban.opposite(),mhash,shash)) {
-                env.nodes.fetch_add(1,atomic::Ordering::Release);
-
-                let (state,mc,_) = Rule::apply_move_none_check(&gs.state, gs.teban, &gs.mc, m.to_applied_move());
-
-                evalutor.submit(gs.teban.opposite(),state.get_banmen(),&mc,Arc::clone(&n))?;
-
-                raw_node.childlren.push(WrappedGameNode { node: n });
-            } else {
-                n.write().map(| mut n | {
-                    n.nodes = 1;
-
-                    env.kyokumen_map.get(&(gs.teban.opposite(), mhash, shash)).map(|g| {
-                        let (s, _, _) = *g;
-
-                        n.win = s;
-                    });
-                })?;
-
-                raw_node.childlren.push(WrappedGameNode { node: n });
+                env.kyokumen_map.insert_new((gs.teban.opposite(), mhash, shash), (Arc::clone(&gs.state),Arc::clone(&gs.mc)));
             }
+
+            env.nodes.fetch_add(1,atomic::Ordering::Release);
+
+            let (state,mc,_) = Rule::apply_move_none_check(&gs.state, gs.teban, &gs.mc, m.to_applied_move());
+
+            evalutor.submit(gs.teban.opposite(),state.get_banmen(),&mc,Arc::clone(&n))?;
+
+            raw_node.childlren.push(WrappedGameNode { node: n });
         }
 
         Ok(BeforeSearchResult::AsyncMvs)
@@ -249,7 +240,7 @@ pub trait Search<L,S>: Sized where L: Logger + Send + 'static, S: InfoSender {
 }
 #[derive(Debug)]
 pub enum EvaluationResult {
-    Value(Score,u64),
+    Done,
     Pending,
     Timeout,
 }
@@ -260,13 +251,13 @@ pub enum RootEvaluationResult {
 }
 #[derive(Debug)]
 pub enum RecvEvaluationResult {
-    Value(WrappedGameNode),
+    Done(WrappedGameNode),
     Pending(WrappedGameNode),
     Timeout(WrappedGameNode),
 }
 #[derive(Debug)]
 pub enum BeforeSearchResult {
-    Complete(EvaluationResult,VecDeque<LegalMove>),
+    Complete(VecDeque<LegalMove>,Score,u64),
     Timeout,
     Terminate(Option<Score>),
     AsyncMvs,
@@ -317,7 +308,7 @@ pub struct Environment<L,S> where L: Logger, S: InfoSender {
     pub max_threads:u32,
     pub stop:Arc<AtomicBool>,
     pub quited:Arc<AtomicBool>,
-    pub kyokumen_map:Arc<ConcurrentFixedHashMap<(Teban,u64,u64),(Score,Arc<State>,Arc<MochigomaCollections>)>>,
+    pub kyokumen_map:Arc<ConcurrentFixedHashMap<(Teban,u64,u64),(Arc<State>,Arc<MochigomaCollections>)>>,
     pub nodes:Arc<AtomicU64>,
     pub think_start_time:Instant
 }
@@ -475,6 +466,8 @@ impl GameNode {
 
     pub fn best_moves(&mut self) -> Result<VecDeque<LegalMove>,ApplicationError> {
         let mut nodes = VecDeque::new();
+        let mut parents = VecDeque::new();
+
         let mut mvs = VecDeque::new();
 
         let c = self.childlren.pop();
@@ -484,9 +477,10 @@ impl GameNode {
                 n.m.map(|m| mvs.push_back(m));
             })?;
 
-            nodes.push_front(n.clone());
+            nodes.push_front(Arc::clone(&n.node));
+            parents.push_front(Arc::clone(&n.node));
 
-            WrappedGameNode { node: Arc::clone(&n.node) }
+            n.clone()
         } else {
             return Ok(mvs);
         };
@@ -501,7 +495,8 @@ impl GameNode {
 
                 let n = WrappedGameNode { node: Arc::clone(&n.node) };
 
-                nodes.push_front(n.clone());
+                nodes.push_front(Arc::clone(&n.node));
+                parents.push_front(Arc::clone(&n.node));
 
                 if n.read().map(|n| n.expanded)? {
                     c = n;
@@ -513,10 +508,19 @@ impl GameNode {
             }
         }
 
-        while let Some(n) = c.read().map(|n| n.parent.upgrade())? {
-            n.write().map(| mut p | {
-                nodes.pop_front().map(|n| p.childlren.push(n));
-            })?;
+        if let Some(n) = nodes.pop_back() {
+            self.childlren.push(WrappedGameNode { node: n });
+        }
+
+        for (p,n) in parents.into_iter().skip(1).zip(nodes.into_iter()) {
+            match p.write() {
+                Ok(mut p) => {
+                    p.childlren.push(WrappedGameNode { node:n });
+                },
+                Err(e) => {
+                    return Err(e)?;
+                }
+            }
         }
 
         self.m.map(|m| mvs.push_front(m));
@@ -526,53 +530,35 @@ impl GameNode {
 
     pub fn best_score(&mut self) -> Result<Score,ApplicationError> {
         let mut nodes = VecDeque::new();
-        let mut score = Score::NEGINFINITE;
-
-        let c = self.childlren.pop();
-
-        let mut c = if let Some(n) = c {
-            if n.read().map(|n| n.expanded)? {
-                score = n.read().map(|n| -n.computed_score())?;
-                self.childlren.push(n);
-
-                return Ok(score);
-            } else {
-                nodes.push_front(WrappedGameNode { node: Arc::clone(&n) });
-            }
-
-            n
-        } else {
-            return Ok(Score::NEGINFINITE);
-        };
 
         loop {
-            let n = c.write()?.childlren.pop();
-
-            if let Some(n) = n {
-                let expanded = n.read().map(|n| n.expanded)?;
-
-                if expanded {
-                    score = -n.read().map(|n| n.computed_score())?;
-                    nodes.push_front(WrappedGameNode { node: Arc::clone(&n) });
-
-                    break;
-                } else {
-                    nodes.push_front(WrappedGameNode { node: Arc::clone(&n) });
-                }
-
-                c = n;
+            let n = if let Some(ref n) = self.childlren.pop() {
+                n.node.clone()
             } else {
                 break;
-            }
+            };
+
+            nodes.push_front(Arc::clone(&n));
+
+            match n.read() {
+                Ok(n) => {
+                    if n.expanded {
+                        let s = n.computed_score();
+
+                        for n in nodes {
+                            self.childlren.push(WrappedGameNode { node: n });
+                        }
+
+                        return Ok(-s);
+                    }
+                },
+                Err(e) => {
+                    return Err(e)?;
+                }
+            };
         }
 
-        while let Some(n) = c.read().map(|n| n.parent.upgrade())? {
-            n.write().map(| mut p | {
-                nodes.pop_front().map(|n| p.childlren.push(n));
-            })?;
-        }
-
-        Ok(score)
+        Ok(Score::NEGINFINITE)
     }
 }
 impl Ord for GameNode {
@@ -689,15 +675,10 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
         };
 
         match self.before_search(env, &mut gs, node, &mut raw_node, evalutor)? {
-            BeforeSearchResult::Complete(EvaluationResult::Value(win, nodes), mvs) => {
-                raw_node.win = win;
-                raw_node.expanded = true;
-                raw_node.nodes = nodes;
-
+            BeforeSearchResult::Complete(mvs,win,nodes) => {
                 return Ok(RootEvaluationResult::Value(win, nodes, mvs));
             },
-            BeforeSearchResult::Timeout | BeforeSearchResult::Terminate(None) |
-            BeforeSearchResult::Complete(EvaluationResult::Timeout, _) => {
+            BeforeSearchResult::Timeout | BeforeSearchResult::Terminate(None) => {
                 return Ok(RootEvaluationResult::Timeout);
             },
             BeforeSearchResult::Terminate(Some(win)) => {
@@ -708,18 +689,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 return Ok(RootEvaluationResult::Value(win, 1, VecDeque::new()));
             },
             BeforeSearchResult::AsyncMvs => {
+                evalutor.on_begin_thread()?;
                 evalutor.begin_transaction()?;
-
-                let best_score = raw_node.best_score()?;
-                let best_moves = raw_node.best_moves()?;
-                let nodes = raw_node.childlren.len() as u64;
-
-                return Ok(RootEvaluationResult::Value(best_score, nodes, best_moves));
-            },
-            BeforeSearchResult::Complete(EvaluationResult::Pending, _) => {
-                return Err(ApplicationError::LogicError(String::from(
-                    "The result of before_search is invalid"
-                )));
             },
             BeforeSearchResult::Recur => {}
         }
@@ -754,8 +725,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                 threads += 1;
 
                 match r {
-                    RecvEvaluationResult::Value(n) | RecvEvaluationResult::Pending(n) => {
-                        let win = match n.write() {
+                    RecvEvaluationResult::Done(n) | RecvEvaluationResult::Pending(n) => {
+                        let (win,expanded,computed_score) = match n.write() {
                             Ok(mut n) => {
                                 if n.expanded && best_score <= -n.computed_score() {
                                     best_score = -n.computed_score();
@@ -765,7 +736,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                     self.send_info(env, &pv, -n.computed_score())?;
                                 }
 
-                                if n.expanded && (&*n).computed_score() == Score::INFINITE {
+                                let win = if n.expanded && n.computed_score() == Score::INFINITE {
                                     raw_node.mate_nodes += 1;
 
                                     if raw_node.mate_nodes == mvs_count {
@@ -775,14 +746,14 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                     }
                                 } else {
                                     None
-                                }
+                                };
+
+                                (win,n.expanded, n.computed_score())
                             },
                             Err(e) => {
                                 return Err(ApplicationError::from(e))
                             }
                         };
-
-                        let (expanded, computed_score) = n.read().map(|n| (n.expanded, n.computed_score()))?;
 
                         if expanded && (win == Some(Score::INFINITE) || computed_score == Score::NEGINFINITE) {
                             raw_node.childlren.push(n);
@@ -835,6 +806,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                         oute_kyokumen_map,
                         current_kyokumen_map,
                         sennichite_count) => {
+
                         if sennichite_count >= 3 && !next_node.expanded {
                             next_node.expanded = true;
                             next_node.nodes = 1;
@@ -859,7 +831,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                         let next = env.kyokumen_map.get(&(gs.teban.opposite(), next_node.mhash, next_node.shash))
                             .map(|g| {
-                                let (_, ref state, ref mc) = *g;
+                                let (ref state, ref mc) = *g;
                                 (Arc::clone(state), Arc::clone(mc))
                             }).unwrap();
 
@@ -877,7 +849,7 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
 
                                 let sender = sender.clone();
 
-                                evalutor.on_begin_thread();
+                                evalutor.on_begin_thread()?;
 
                                 let m = next_node.m;
                                 let mhash = next_node.mhash;
@@ -912,8 +884,8 @@ impl<L,S> Root<L,S> where L: Logger + Send + 'static, S: InfoSender {
                                                             &mut event_dispatcher, &evalutor);
 
                                     let r = match r {
-                                        Ok(EvaluationResult::Value(_, _)) => {
-                                            Ok(RecvEvaluationResult::Value(game_node.clone()))
+                                        Ok(EvaluationResult::Done) => {
+                                            Ok(RecvEvaluationResult::Done(game_node.clone()))
                                         },
                                         Ok(EvaluationResult::Timeout) => {
                                             Ok(RecvEvaluationResult::Timeout(game_node.clone()))
@@ -1102,12 +1074,12 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
                         raw_node.win = win;
                         raw_node.nodes += 1;
 
-                        return Ok(EvaluationResult::Value(win, 1));
+                        return Ok(EvaluationResult::Done);
                     }
 
                     let next = env.kyokumen_map.get(&(gs.teban.opposite(), next_node.mhash, next_node.shash))
                         .map(|g| {
-                            let (_, ref state, ref mc) = *g;
+                            let (ref state, ref mc) = *g;
                             (Arc::clone(state), Arc::clone(mc))
                         }).unwrap();
 
@@ -1132,13 +1104,13 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                             match strategy.search(env, &mut gs, &Arc::downgrade(&game_node.node), event_dispatcher, evalutor)? {
                                 EvaluationResult::Timeout => {
-                                    return Ok(EvaluationResult::Value(Score::Value(0.), 0));
+                                    return Ok(EvaluationResult::Timeout);
                                 },
                                 EvaluationResult::Pending => {
                                     return Ok(EvaluationResult::Pending);
                                 },
-                                EvaluationResult::Value(_, _) => {
-                                    return Ok(EvaluationResult::Pending);
+                                EvaluationResult::Done => {
+                                    return Ok(EvaluationResult::Done);
                                 }
                             }
                         }
@@ -1147,7 +1119,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
             }
         } else {
             match self.before_search(env, &mut gs, node, &mut raw_node, evalutor)? {
-                BeforeSearchResult::Complete(EvaluationResult::Value(win,nodes),_) => {
+                BeforeSearchResult::Complete(_, win, nodes) => {
                     raw_node.win = win;
                     raw_node.expanded = true;
                     raw_node.nodes = nodes;
@@ -1156,7 +1128,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                     Ok(EvaluationResult::Pending)
                 },
-                BeforeSearchResult::Timeout | BeforeSearchResult::Complete(EvaluationResult::Timeout,_) => {
+                BeforeSearchResult::Timeout => {
                     self.send_depth(env,gs.current_depth)?;
 
                     Ok(EvaluationResult::Timeout)
@@ -1185,7 +1157,7 @@ impl<L,S> Search<L,S> for Recursive<L,S> where L: Logger + Send + 'static, S: In
 
                     Ok(EvaluationResult::Pending)
                 },
-                BeforeSearchResult::Recur | BeforeSearchResult::Complete(EvaluationResult::Pending,_) => {
+                BeforeSearchResult::Recur => {
                     Err(ApplicationError::LogicError(String::from(
                         "The result of before_search is invalid"
                     )))
